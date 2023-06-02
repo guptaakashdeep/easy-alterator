@@ -127,7 +127,7 @@ def _update_table_schema(glue_client, table, new_cols, del_cols):
     extra_keys = ['DatabaseName', 'CreateTime', 'UpdateTime', 'CreatedBy', 'IsRegisteredWithLakeFormation',
                   'CatalogId', 'VersionId', 'FederatedTable']
     for key in extra_keys:
-        updated_table['Table'].pop(key)
+        updated_table['Table'].pop(key, None)
 
     # add new cols:
     existing_columns = table['Table']['StorageDescriptor']['Columns']
@@ -189,7 +189,7 @@ if __name__ == "__main__":
                 config = _read_yaml(ddl_config_path)
                 if path_key in config:
                     _check_paths(config[path_key])
-                    hql_paths = config[path_key]
+                    hql_paths.append(config[path_key])
                 else:
                     raise Exception(f"Provided key_for_path is not available in {ddl_config_path} configuration file")
             else:
@@ -323,9 +323,12 @@ if __name__ == "__main__":
                             # TODO: implement logic for data_Type compatibility.
                         # Create ALTER statements => TEST it via EMR first.
                         if not skip:
-                            _update_table_schema(glue, table=tbl_details,
-                                                 new_cols=added_cols_dlist,
-                                                 del_cols=del_cols_dlist)
+                            if added_cols_dlist or del_cols_dlist:
+                                _update_table_schema(glue, table=tbl_details,
+                                                     new_cols=added_cols_dlist,
+                                                     del_cols=del_cols_dlist)
+                            else:
+                                print(f"Update is not required for `{table_name}`trs")
                         else:
                             print(f"skipping schema update for table: "
                                   f"{table_name} due to data type change detected for columns.")

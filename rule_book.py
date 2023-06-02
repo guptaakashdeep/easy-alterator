@@ -88,7 +88,7 @@ def partition_col_check(hql_str, catalog_partn_cols):
         hql_df = pd.DataFrame(hql_pcols)
         catalog_df = pd.DataFrame(catalog_partn_cols)
         diff_cols = pd.concat([hql_df, catalog_df]).drop_duplicates(keep=False)
-        if diff_cols:
+        if diff_cols.empty:
             return True
         else:
             return False
