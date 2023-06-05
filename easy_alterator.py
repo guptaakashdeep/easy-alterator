@@ -135,7 +135,7 @@ def _update_table_schema(glue_client, table, new_cols, del_cols):
 
     # remove deleted columns
     if del_cols:
-        updated_columns = list(filter(lambda d: d['Name'] not in del_cols, new_cols_list))
+        updated_columns = list(filter(lambda d: d not in del_cols, new_cols_list))
     else:
         updated_columns = new_cols_list
 
@@ -200,12 +200,15 @@ if __name__ == "__main__":
     print("DDL paths:", hql_paths)
 
     # Extract files from path as per the suffix and prefix provided.
-    final_file_list = _filter_files(hql_paths, ddl_file_prefix, ddl_file_suffix, table_names=config['tables'])
+    if config:
+        final_file_list = _filter_files(hql_paths, ddl_file_prefix, ddl_file_suffix, table_names=config['tables'])
+    else:
+        final_file_list = _filter_files(hql_paths, ddl_file_prefix, ddl_file_suffix)
 
     # create aws glue client
     glue = boto3.client('glue')
 
-    table_rgx = "TABLE [IF NOT EXISTS]* `(\w+)[\.](\w+)`"
+    table_rgx = "TABLE [IF NOT EXISTS]?\s*`(\w+)[\.](\w+)`"
     column_rgs = "`(\w+)`\s+(\w+),*"
     skipped_tables = []
     new_tables = []

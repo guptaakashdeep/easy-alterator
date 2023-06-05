@@ -39,6 +39,7 @@ def parquet_check(table_obj):
         else:
             return False
     elif isinstance(table_obj, str):
+        print("inside string PV")
         store_regex = "STORED\s+AS\s+(\w+)"
         match = re.search(store_regex, table_obj, flags=re.IGNORECASE)
         if match:
@@ -47,18 +48,21 @@ def parquet_check(table_obj):
                 return True
             elif stored_as == "inputformat":
                 print("check for serde's here")
-                row_fmt_regex = "ROW\s+FORMAT\s+SERDE\s+'(\w\.]+)'"
+                row_fmt_regex = "ROW\s+FORMAT\s+SERDE\s+'([\w\.]+)'"
                 row_fmt_match = re.search(row_fmt_regex, table_obj, flags=re.IGNORECASE)
                 if row_fmt_match:
-                    if row_fmt_match.group(1) == PARQUET_ROW_FORMAT:
+                    print("ROW FORMAT MATCHES..!!")
+                    if row_fmt_match.group(1) == PARQUET_ROW_FORMAT.lower():
                         input_serde_regex = "INPUTFORMAT\s+'([\w\.]+)'"
                         input_serde_match = re.search(input_serde_regex, table_obj, flags=re.IGNORECASE)
                         output_serde_regex = "OUTPUTFORMAT\s+'([\w\.]+)'"
                         output_serde_match = re.search(output_serde_regex, table_obj, flags=re.IGNORECASE)
                         if input_serde_match and output_serde_match:
-                            return True if input_serde_match.group(1) == INPUT_SERDE and output_serde_match.group(
-                                1) == OUTPUT_SERDE else False
+                            return True if input_serde_match.group(1) == INPUT_SERDE.lower() and output_serde_match.group(
+                                1) == OUTPUT_SERDE.lower() else False
                         else:
+                            print("INPUT/OUTPUT SERDE isn't Parquet SERDE ==>", input_serde_match.group(1), "\n",
+                                  output_serde_match.group(1))
                             return False
                     else:
                         return False
