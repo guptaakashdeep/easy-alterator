@@ -208,7 +208,7 @@ if __name__ == "__main__":
     # create aws glue client
     glue = boto3.client('glue')
 
-    table_rgx = "TABLE [IF NOT EXISTS]?\s*`(\w+)[\.](\w+)`"
+    table_rgx = "TABLE [IF NOT EXISTS]*\s*`(\w+)[\.](\w+)`"
     column_rgs = "`(\w+)`\s+(\w+),*"
     skipped_tables = []
     new_tables = []
