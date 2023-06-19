@@ -1,16 +1,80 @@
-import re
-import yaml
-import sys
-import os
-import boto3
 import argparse
+import os
+import sys
+import yaml
+import re
+import boto3
 from botocore.exceptions import ClientError
 import pandas as pd
 from copy import deepcopy
 from os import popen
-from .rule_book import *
+from rule_book import *
 
 
+def _get_bucket_key(s3_path):
+    """
+    Gets the S3 bucket and key.
+    :param s3_path: str
+    :return: tuple
+    """
+    s3_path = s3_path.replace("s3://", "")
+    s3_path_list = s3_path.split("/",1)
+    if len(s3_path_list) < 2:
+        return "", ""
+    s3_bucket = s3_path_list[0]
+    s3_key = s3_path_list[1]
+    return s3_bucket, s3_key
+
+
+def _validate_s3_object(s3_path):
+    """
+    Validates the S3 path.
+    :param s3_path: str
+    :return: bool
+    """
+    s3_bucket, s3_key = _get_bucket_key(s3_path)
+    s3 = boto3.client('s3')
+    try:
+        s3.head_object(Bucket=s3_bucket, Key=s3_key)
+    except ClientError:
+        return False
+    return True
+
+
+def _list_s3_objects(s3_path):
+    """
+    Lists all the objects in the S3 path.
+    :param s3_path: str
+    :return: list
+    """
+    s3_bucket, s3_key = _get_bucket_key(s3_path)
+    s3 = boto3.client('s3')
+    try:
+        response = s3.list_objects_v2(Bucket=s3_bucket, Prefix=s3_key)
+    except ClientError:
+        return []
+    if 'Contents' in response:
+        return response['Contents']
+    else:
+        return []
+    
+
+def _read_s3_file(s3_path):
+    """
+    Reads the S3 file.
+    :param s3_path: str
+    :return: str
+    """
+    s3_bucket, s3_key = _get_bucket_key(s3_path)
+    s3 = boto3.client('s3')
+    try:
+        response = s3.get_object(Bucket=s3_bucket, Key=s3_key)
+    except ClientError:
+        return ""
+    return response['Body'].read().decode('utf-8')
+
+
+# TODO:Add support for S3 path or reading from s3 path
 def _check_paths(files):
     """
     Checks if the provided file or directory path or list of paths is valid.
@@ -21,15 +85,30 @@ def _check_paths(files):
     valid = True
     if isinstance(files, list):
         for file_path in files:
-            if not os.path.exists(file_path):
-                valid = False
-                print(f"{file_path} is invalid.")
+            if file_path.startswith("s3://"):
+                valid = _validate_s3_object(file_path)
+                if not valid:
+                    valid = False
+                    print(f"{file_path} is invalid.")
+            else:
+                if not os.path.exists(file_path):
+                    valid = False
+                    print(f"{file_path} is invalid.")
     else:
-        if not os.path.exists(files):
+        if isinstance(files, str):
+            if files.startswith("s3://"):
+                valid = _validate_s3_object(files)
+                if not valid:
+                    valid = False
+                    print(f"{files} is invalid.")
+            elif not os.path.exists(files):
+                valid = False
+                print(f"{files} is invalid.")
+        else:
             valid = False
-            print(f"{files} is invalid.")
+            print("path format is invalid.")
     if not valid:
-        raise Exception("Provided paths are invalid")
+        raise Exception("One or more provided paths are invalid")
 
 
 def _filter_files(paths, prefix, suffix, **kwargs):
@@ -48,6 +127,7 @@ def _filter_files(paths, prefix, suffix, **kwargs):
     if 'table_names' in kwargs:
         table_list = kwargs['table_names']
     file_list = []
+    # TODO: Add support for listing all the s3 paths in case path provided is s3 path.
     for path in paths:
         # if the path is a directory, filtering all the files starting with prefix and suffix in file.
         if os.path.isdir(path):
@@ -76,7 +156,7 @@ def _read_yaml(path):
     :param path:
     :return: json object
     """
-    with open(path, 'r') as f:
+    with open(path, 'r', encoding='utf-8') as f:
         data = yaml.safe_load(f)
     return data
 
@@ -96,7 +176,7 @@ def _intial_checks(table_info):
         result = value(table_info)
         if not result:
             print(f"{key} validation failed.")
-            # TODO: MAYBE update this later to something more meaningful ?
+            # TODO: MAYBE update this later to something more meaningful ? A failure event ?
             return False
     return True
 
@@ -184,6 +264,7 @@ if __name__ == "__main__":
         hql_paths = paths
     if ddl_config_path:
         _check_paths(ddl_config_path)
+        #TODO: Add support for reading from S3 file.
         if os.path.isfile(ddl_config_path):
             if ddl_config_path.endswith(".yaml"):
                 config = _read_yaml(ddl_config_path)
@@ -221,22 +302,12 @@ if __name__ == "__main__":
         for fname in final_file_list:
             skip = False
             move_to_next = False
-            with open(fname, 'r') as f:
+            with open(fname, 'r', encoding='utf-8') as f:
                 data = f.read().lower().strip().format(aws_account_id=aws_account_id)
-
-            # Check if the table_type = 'EXTERNAL'
-            # can get the aws_account id from catalog_id
-            """
-            with open('sample_response.json', 'r') as f:
-                content = f.read()
-            partition_keys = [{"Name": "day_rk", "Type": "date"}, {"Name": "jurisdiction_type", "Type": "string"}]
-            res = json.loads(content) + partition_keys
-            """
             if data:
                 table_match = re.search(table_rgx, data, flags=re.IGNORECASE)
                 db, table = table_match.groups()
                 table_name = f'{db}.{table}'
-
                 # Check if hql is create statement.
                 if not data.startswith("create"):
                     print(f"HQL provided for {table_name} is not a create statement.")
@@ -318,12 +389,16 @@ if __name__ == "__main__":
                         # TODO: print columns with data type changes
                         if dtype_changes:
                             print("data type changes records for: ", dtype_changes)
+                            # check fordata type compatibility
+                            new_dtype_df = new_cols_df[new_cols_df['Name'].isin(dtype_changes)]
+                            old_dtype_df = old_df[old_df['Name'].isin(dtype_changes)]
+                            merged_df = new_dtype_df.merge(old_dtype_df, on=['Name'], suffixes=("_new","_old"))
                             print(f"Skipping schema update for {table_name}")
-                            skipped_tables.append(table_name)
-                            skip = True
-                            # check for data_type changed compatibility
-                            # print("Checking if data_type changed is compatible...")
-                            # TODO: implement logic for data_Type compatibility.
+                            response = check_dtype_compatibility(merged_df)
+                            if not response:
+                                print(f"Skipping schema update for {table_name}")
+                                skipped_tables.append(table_name)
+                                skip = True
                         # Create ALTER statements => TEST it via EMR first.
                         if not skip:
                             if added_cols_dlist or del_cols_dlist:
@@ -331,7 +406,7 @@ if __name__ == "__main__":
                                                      new_cols=added_cols_dlist,
                                                      del_cols=del_cols_dlist)
                             else:
-                                print(f"Update is not required for `{table_name}`trs")
+                                print(f"Update is not required for `{table_name}`")
                         else:
                             print(f"skipping schema update for table: "
                                   f"{table_name} due to data type change detected for columns.")

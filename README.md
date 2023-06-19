@@ -37,6 +37,7 @@ The only pre-requisite is to provide the DDL file and config yaml file in a spec
 It's case-insensitive. It should follow the format of 
 1. keeping the `table name` and `column name` within ticks (`)
 2. TABLE FORMAT can be mentioned using `STORED AS PARQUET` or combination of `ROW FORMAT SERDE`, `INPUTFORMAT` and `OUTPUTFORMAT`
+
 ```
 CREATE EXTERNAL TABLE IF EXISTS `db_name.table_name`(
     `column1` string,
@@ -51,9 +52,9 @@ PARTITIONED BY (
 )
 STORED AS PARQUET
 or
-ROW FORMAT SERDE org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe,
-INPUTFORMAT org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat,
-OUTPUTFORMAT org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat,
+ROW FORMAT SERDE 'org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe'
+STORED AS INPUTFORMAT 'org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat'
+OUTPUTFORMAT 'org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat'
 LOCATION "s3://<bucket>/<key>";
 ```
 

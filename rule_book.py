@@ -96,9 +96,39 @@ def partition_col_check(hql_str, catalog_partn_cols):
             return True
         else:
             return False
+        
+
+def check_dtype_compatibility(df, query_engine="athena"):
+    """
+    Checks if the changed data type of the column is compatible with the new data type for the mentioned query engine
+    :param df: pandas dataframe
+    :param query_engine: str, query engine name. Default is "athena"
+    :return: bool
+    """
+    compatibility_dict = QUERY_ENG_DTYPE_COMPATIBILITY[query_engine]
+    df["compatible"] = df.apply(lambda x: True if x["Type_new"].upper() in compatibility_dict[x["Type_old"].upper()] else False, axis=1)
+    incompatible_cols = df[df["compatible"] == False]
+    if not incompatible_cols.empty:
+        print("Incompatible data type change found in the DDL: ")
+        print(incompatible_cols.apply(lambda row: f'{row["Name"]} data type changed from {row["Type_old"]} to {row["Type_new"]}', axis=1))
+        print("Please change the data type of the following columns to the compatible data type.")
+        return False
+    else:
+        return True
 
 
 INITIAL_RULE_DICT = {
     "EXTERNAL_TABLE": external_table_check,
     "PARQUET_CHECK": parquet_check
+}
+
+QUERY_ENG_DTYPE_COMPATIBILITY = {
+    "athena" : {
+        "STRING" :	["BYTE", "TINYINT", "SMALLINT", "INT", "BIGINT"],
+        "BYTE" :	["TINYINT", "SMALLINT", "INT", "BIGINT"],
+        "TINYINT" :	["SMALLINT", "INT", "BIGINT"],
+        "SMALLINT" : ["INT", "BIGINT"],
+        "INT" :	["BIGINT"],
+        "FLOAT" :	["DOUBLE"]
+    }
 }
