@@ -35,8 +35,11 @@ def _validate_s3_object(s3_path):
     s3_bucket, s3_key = _get_bucket_key(s3_path)
     s3 = boto3.client('s3')
     try:
-        s3.head_object(Bucket=s3_bucket, Key=s3_key)
+        # using list_object_v2 to validate instead of head_object because s3_key can be just path to folder like structure
+        response = s3.list_objects_v2(Bucket=s3_bucket, Prefix=s3_key, Delimiter="/", MaxKeys=1)
     except ClientError:
+        return False
+    if response['KeyCount'] == 0:
         return False
     return True
 
@@ -49,14 +52,32 @@ def _list_s3_objects(s3_path):
     """
     s3_bucket, s3_key = _get_bucket_key(s3_path)
     s3 = boto3.client('s3')
-    try:
-        response = s3.list_objects_v2(Bucket=s3_bucket, Prefix=s3_key)
-    except ClientError:
-        return []
-    if 'Contents' in response:
-        return response['Contents']
-    else:
-        return []
+    keylist = []
+    kwargs = {"Bucket": s3_bucket}
+    if isinstance(s3_key, str):
+        kwargs['Prefix'] = s3_key
+
+    while True:
+        # The S3 API response is a large blob of metadata.
+        # 'Contents' contains information about the listed objects.
+        try:
+            response = s3.list_objects_v2(**kwargs)
+        except ClientError:
+            return []
+        # if no keys found, return empty
+        if response['KeyCount']:
+            contents = response['Contents']
+            for obj in contents:
+                key = obj['Key']
+                keylist.append(key)
+        # The S3 API is paginated, returning up to 1000 keys at a time.
+        # Pass the continuation token into the next response, until we
+        # reach the final page (when this field is missing).
+        try:
+            kwargs['ContinuationToken'] = response['NextContinuationToken']
+        except KeyError:
+            break
+    return keylist
     
 
 def _read_s3_file(s3_path):
