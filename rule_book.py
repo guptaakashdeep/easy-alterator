@@ -58,7 +58,8 @@ def parquet_check(table_obj):
                         output_serde_regex = "OUTPUTFORMAT\s+'([\w\.]+)'"
                         output_serde_match = re.search(output_serde_regex, table_obj, flags=re.IGNORECASE)
                         if input_serde_match and output_serde_match:
-                            return True if input_serde_match.group(1) == INPUT_SERDE.lower() and output_serde_match.group(
+                            return True if input_serde_match.group(
+                                1) == INPUT_SERDE.lower() and output_serde_match.group(
                                 1) == OUTPUT_SERDE.lower() else False
                         else:
                             print("INPUT/OUTPUT SERDE isn't Parquet SERDE ==>", input_serde_match.group(1), "\n",
@@ -87,7 +88,7 @@ def partition_col_check(hql_str, catalog_partn_cols):
     partition_regex = "PARTITIONED\s+BY\s+\(([\w`\s,]+)\)"
     match = re.search(partition_regex, hql_str, flags=re.IGNORECASE)
     if match:
-        parition_cols = re.sub('\s+', ' ', match.group(1).lower().strip().replace('`','')).split(',')
+        parition_cols = re.sub('\s+', ' ', match.group(1).lower().strip().replace('`', '')).split(',')
         hql_pcols = [{"Name": col.strip().split(' ')[0], "Type": col.strip().split(' ')[1]} for col in parition_cols]
         hql_df = pd.DataFrame(hql_pcols)
         catalog_df = pd.DataFrame(catalog_partn_cols)
@@ -96,7 +97,7 @@ def partition_col_check(hql_str, catalog_partn_cols):
             return True
         else:
             return False
-        
+
 
 def check_dtype_compatibility(df, query_engine="athena"):
     """
@@ -106,11 +107,13 @@ def check_dtype_compatibility(df, query_engine="athena"):
     :return: bool
     """
     compatibility_dict = QUERY_ENG_DTYPE_COMPATIBILITY[query_engine]
-    df["compatible"] = df.apply(lambda x: True if x["Type_new"].upper() in compatibility_dict[x["Type_old"].upper()] else False, axis=1)
+    df["compatible"] = df.apply(
+        lambda x: True if x["Type_new"].upper() in compatibility_dict.get(x["Type_old"].upper(), None) else False, axis=1)
     incompatible_cols = df[df["compatible"] == False]
     if not incompatible_cols.empty:
         print("Incompatible data type change found in the DDL: ")
-        print(incompatible_cols.apply(lambda row: f'{row["Name"]} data type changed from {row["Type_old"]} to {row["Type_new"]}', axis=1))
+        print(incompatible_cols.apply(
+            lambda row: f'{row["Name"]} data type changed from {row["Type_old"]} to {row["Type_new"]}', axis=1))
         print("Please change the data type of the following columns to the compatible data type.")
         return False
     else:
@@ -123,12 +126,12 @@ INITIAL_RULE_DICT = {
 }
 
 QUERY_ENG_DTYPE_COMPATIBILITY = {
-    "athena" : {
-        "STRING" :	["BYTE", "TINYINT", "SMALLINT", "INT", "BIGINT"],
-        "BYTE" :	["TINYINT", "SMALLINT", "INT", "BIGINT"],
-        "TINYINT" :	["SMALLINT", "INT", "BIGINT"],
-        "SMALLINT" : ["INT", "BIGINT"],
-        "INT" :	["BIGINT"],
-        "FLOAT" :	["DOUBLE"]
+    "athena": {
+        "STRING": ["BYTE", "TINYINT", "SMALLINT", "INT", "BIGINT"],
+        "BYTE": ["TINYINT", "SMALLINT", "INT", "BIGINT"],
+        "TINYINT": ["SMALLINT", "INT", "BIGINT"],
+        "SMALLINT": ["INT", "BIGINT"],
+        "INT": ["BIGINT"],
+        "FLOAT": ["DOUBLE"]
     }
 }
