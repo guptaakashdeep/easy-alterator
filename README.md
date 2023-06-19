@@ -2,7 +2,7 @@
 - This utility is developed to update the schema for `EXTERNAL` `PARQUET` format v1 tables (i.e. non open source format tables like delta, iceberg etc.)  in your data pipelines that uses `AWS Glue Catalog` as hive metastore for your spark jobs.
 - This utility will help in saving time by manually comparing the table schemas and need of backfill your table data incase if there is any deletion and addition of column. [Check FAQ for more details.]
 - This utility compares the `hql`/`DDL` provided for the table with the already existing ones, identified the newly added/removed columns along with data type update for any column if there is any, and updates the table schema in AWS Glue catalog automatically.
-- Incase of **data type mismatch** with the already existing tables, at present at the time of writing this, it skips the table update and mentions the same as the reason of skipping table. [upcoming version: will include data type compatibility of existing and provided data type and update action will be taken accordingly.]
+- Incase of **data type mismatch** with the already existing tables, ~~at present at the time of writing this, it skips the table update and mentions the same as the reason of skipping table. [upcoming version: will include data type compatibility of existing and provided data type and update action will be taken accordingly.]~~ data type compatibility is checked, if data type change is compatible with the query engine being used for data, table will be updated and if not then update is skipped
 
 ## Checks before updating a table
 There are some checks implemented in place that checks if the table being updated safely and won't break any query engine which is used to query the data after the udate. Below are the mentioned checks that are in place:
@@ -10,6 +10,17 @@ There are some checks implemented in place that checks if the table being update
 2. Table is an `EXTERNAL` table at both the places i.e. in provided DDL file and in glue catalog.
 3. Table is a `PARQUET` table as per the provided DDL and in glue catalog.
 4. `Partition Columns` are not changed.
+5. `data type` compatibility in case of data type fo table is changed.
+
+### Athena Query Engines
+ Origina Datatype | Available Target Datatype | 
+| --- | ----------- |
+|STRING|BYTE, TINYINT, SMALLINT, INT, BIGINT
+|BYTE|	TINYINT, SMALLINT, INT, BIGINT
+|TINYINT|	SMALLINT, INT, BIGINT
+|SMALLINT|	INT, BIGINT
+|INT|	BIGINT
+|FLOAT|	DOUBLE
 
 ## Easy Alterator Functionality
 Idea behind creating Easy Alterator is to provide ability to ADD/DROP/REPLACE/CHANGE column for v1 parquet external table so it can be achieved without dropping and backfilling your table.
