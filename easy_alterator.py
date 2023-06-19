@@ -8,7 +8,7 @@ from botocore.exceptions import ClientError
 import pandas as pd
 from copy import deepcopy
 from os import popen
-from rule_book import *
+from .rule_book import *
 
 
 def _get_bucket_key(s3_path):
@@ -18,7 +18,7 @@ def _get_bucket_key(s3_path):
     :return: tuple
     """
     s3_path = s3_path.replace("s3://", "")
-    s3_path_list = s3_path.split("/",1)
+    s3_path_list = s3_path.split("/", 1)
     if len(s3_path_list) < 2:
         return "", ""
     s3_bucket = s3_path_list[0]
@@ -56,7 +56,6 @@ def _list_s3_objects(s3_path):
     kwargs = {"Bucket": s3_bucket}
     if isinstance(s3_key, str):
         kwargs['Prefix'] = s3_key
-
     while True:
         # The S3 API response is a large blob of metadata.
         # 'Contents' contains information about the listed objects.
@@ -78,7 +77,7 @@ def _list_s3_objects(s3_path):
         except KeyError:
             break
     return keylist
-    
+
 
 def _read_s3_file(s3_path):
     """
@@ -95,7 +94,6 @@ def _read_s3_file(s3_path):
     return response['Body'].read().decode('utf-8')
 
 
-# TODO:Add support for S3 path or reading from s3 path
 def _check_paths(files):
     """
     Checks if the provided file or directory path or list of paths is valid.
@@ -150,21 +148,40 @@ def _filter_files(paths, prefix, suffix, **kwargs):
     file_list = []
     # TODO: Add support for listing all the s3 paths in case path provided is s3 path.
     for path in paths:
+        files_list = []
+        is_cloud_path = False
         # if the path is a directory, filtering all the files starting with prefix and suffix in file.
-        if os.path.isdir(path):
-            filtered_files = list(filter(lambda x: x.startswith(prefix) and x.endswith(suffix), os.listdir(path)))
+        if (not path.startswith("s3://")) and os.path.isdir(path):
+            files_list = os.listdir(path)
+        elif path.startswith("s3://"):
+            is_cloud_path = True
+            files_list = _list_s3_objects(path)
+        else:
+            file_list.append(path)
+        if files_list:
+            if is_cloud_path:
+                filtered_files = list(filter(lambda x: x.rsplit("/", 1)[1].startswith(prefix) and
+                                                       x.rsplit("/", 1)[1].endswith(suffix), files_list))
+            else:
+                filtered_files = list(filter(lambda x: x.startswith(prefix) and
+                                                       x.endswith(suffix), files_list))
             if table_list:
                 print("inside filter 2", len(table_list))
                 # filtering the file only for the tables mentioned in table list.
-                final_list = list(filter(lambda name: name is not None,
-                                         [f'{prefix}{x}.{suffix}' if f'{prefix}{x}.{suffix}' in filtered_files else None
-                                          for x in table_list]))
+                if is_cloud_path:
+                    cloud_filenames = [f.rsplit("/", 1)[1] for f in filtered_files]
+                    final_list = list(filter(lambda name: name is not None,
+                                             [f'{prefix}{x}.{suffix}' if f'{prefix}{x}.{suffix}' in cloud_filenames else None
+                                                 for x in table_list]))
+                else:
+                    final_list = list(filter(lambda name: name is not None,
+                                             [f'{prefix}{x}.{suffix}' if f'{prefix}{x}.{suffix}' in filtered_files else None
+                                              for x in table_list]))
             else:
                 final_list = filtered_files
             # TODO: need to add support for Windows OS ?? Supports only linux FS as of now.
-            file_list = file_list + list(map(lambda x: f'{path}{x}' if path.endswith("/") else f'{path}/{x}', final_list))
-        else:
-            file_list.append(path)
+            file_list = file_list + list(
+                map(lambda x: f'{path}{x}' if path.endswith("/") else f'{path}/{x}', final_list))
     # print(len(os.listdir(paths[0])))
     # print(len(filtered_files))
     # print(len(final_list))
@@ -177,8 +194,11 @@ def _read_yaml(path):
     :param path:
     :return: json object
     """
-    with open(path, 'r', encoding='utf-8') as f:
-        data = yaml.safe_load(f)
+    if path.startswith("s3://"):
+        data = yaml.safe_load(_read_s3_file(path))
+    else:
+        with open(path, 'r', encoding='utf-8') as fs:
+            data = yaml.safe_load(fs)
     return data
 
 
@@ -285,15 +305,16 @@ if __name__ == "__main__":
         hql_paths = paths
     if ddl_config_path:
         _check_paths(ddl_config_path)
-        #TODO: Add support for reading from S3 file.
-        if os.path.isfile(ddl_config_path):
+        # Added support for reading from S3 file.
+        if os.path.isfile(ddl_config_path) or ddl_config_path.startswith("s3://"):
             if ddl_config_path.endswith(".yaml"):
                 config = _read_yaml(ddl_config_path)
                 if path_key in config:
                     _check_paths(config[path_key])
                     hql_paths.append(config[path_key])
                 else:
-                    raise Exception(f"Provided key_for_path is not available in {ddl_config_path} configuration file")
+                    if not paths:
+                        raise Exception(f"Provided key_for_path is not available in {ddl_config_path} configuration file")
             else:
                 raise Exception("Only .yaml configuration files are supported.")
         else:
@@ -315,7 +336,7 @@ if __name__ == "__main__":
     skipped_tables = []
     new_tables = []
 
-    # Fetching AWS ID form EMR
+    # Fetching AWS ID from EMR
     aws_account_id = str(popen(
         "curl -s http://169.254.169.254/latest/dynamic/instance-identity/document | jq -r .accountId").read().strip())
     try:
@@ -323,123 +344,133 @@ if __name__ == "__main__":
         for fname in final_file_list:
             skip = False
             move_to_next = False
-            with open(fname, 'r', encoding='utf-8') as f:
-                data = f.read().lower().strip().format(aws_account_id=aws_account_id)
+            print(f"###### Process started for {fname} ######")
+            if fname.startswith("s3://"):
+                file_content = _read_s3_file(fname)
+                data = file_content.lower().strip().format(aws_account_id=aws_account_id)
+            else:
+                with open(fname, 'r', encoding='utf-8') as f:
+                    data = f.read().lower().strip().format(aws_account_id=aws_account_id)
             if data:
                 table_match = re.search(table_rgx, data, flags=re.IGNORECASE)
-                db, table = table_match.groups()
-                table_name = f'{db}.{table}'
-                # Check if hql is create statement.
-                if not data.startswith("create"):
-                    print(f"HQL provided for {table_name} is not a create statement.")
-                    skipped_tables.append(table_name)
-                    skip = True
+                if table_match:
+                    db, table = table_match.groups()
+                    table_name = f'{db}.{table}'
                 else:
-                    # run initial checks on HQL
-                    print("Running initial validation.")
-                    validation_results = _intial_checks(data)
-                    if validation_results:
-                        print(f"Initial validations are successful for {table_name}.")
-                    else:
-                        print(f"Initial validation failed for provided HQL {table_name}.")
+                    print(f"Please validate the DDL format for {fname}")
+                    skip = True
+                if not skip:
+                    # Check if hql is create statement.
+                    if not data.startswith("create"):
+                        print(f"HQL provided for {table_name} is not a create statement.")
                         skipped_tables.append(table_name)
                         skip = True
-                if not skip:
-                    # get table details from glue catalog
-                    tbl_details = _get_table_details(glue, db, table)
-                    if isinstance(tbl_details, dict):
-                        if 'Error' in tbl_details:
-                            # in case table doesn't exist in Glue catalog
-                            new_tables.append(table_name)
-                            move_to_next = True
-                        else:
-                            partition_keys = tbl_details['Table']['PartitionKeys']
-                            fetched_loc = tbl_details['Table']['StorageDescriptor']['Location']
-                            columns = tbl_details['Table']['StorageDescriptor']['Columns']
-                            # run initial checks
-                            catalog_validation = _intial_checks(tbl_details)
-                            if catalog_validation:
-                                print("Initial validation for catalog passed.")
-                            else:
-                                skipped_tables.append(table_name)
-                                skip = True
-                                print("Initial validation for catalog failed.")
-                            # run partition column check
-                            partition_validation = partition_col_check(data, partition_keys)
-                            if partition_validation:
-                                print(f"Partition Validation passed for {table_name}.")
-                            else:
-                                skipped_tables.append(table_name)
-                                skip = True
-                                print(f"Partition Validation failed for {table_name}.")
-                    if not move_to_next and not skip:
-                        # Fetch all the columns from HQL file:
-                        hql_cols = re.findall(column_rgs, data, flags=re.IGNORECASE)
-                        hql_col_dlist = [{'Name': col[0], 'Type': col[1]} for col in hql_cols]
-
-                        # getting all the columns from glue catalog
-                        catalog_col_list = columns + partition_keys
-
-                        # Schema comparison logic ==>
-                        new_df = pd.DataFrame(hql_col_dlist)
-                        old_df = pd.DataFrame(catalog_col_list)
-
-                        new_df["From"] = "new"
-                        old_df["From"] = "old"
-
-                        # includes added, deleted and data type changed columns
-                        new_cols_df = pd.concat([new_df, old_df]).drop_duplicates(['Name', 'Type'], keep=False)
-
-                        # getting columns with data type change
-                        dtype_changes = new_cols_df[new_cols_df.duplicated(['Name'], keep='first')]['Name'].to_list()
-
-                        # added and deleted columns
-                        remaining_cols = new_cols_df[~new_cols_df['Name'].isin(dtype_changes)]
-
-                        # new columns
-                        added_cols_dlist = remaining_cols[remaining_cols['From'] == 'new'][['Name', 'Type']].to_dict(
-                            'records')
-                        # deleted columns
-                        del_cols_dlist = remaining_cols[remaining_cols['From'] == 'old'][['Name', 'Type']].to_dict(
-                            'records')
-
-                        # print(remaining_cols)
-                        print("Newly Added columns ==>", added_cols_dlist)
-                        print("Removed columns ===>", del_cols_dlist)
-
-                        # TODO: print columns with data type changes
-                        if dtype_changes:
-                            print("data type changes records for: ", dtype_changes)
-                            # check fordata type compatibility
-                            new_dtype_df = new_cols_df[new_cols_df['Name'].isin(dtype_changes)]
-                            old_dtype_df = old_df[old_df['Name'].isin(dtype_changes)]
-                            merged_df = new_dtype_df.merge(old_dtype_df, on=['Name'], suffixes=("_new","_old"))
-                            print(f"Skipping schema update for {table_name}")
-                            response = check_dtype_compatibility(merged_df)
-                            if not response:
-                                print(f"Skipping schema update for {table_name}")
-                                skipped_tables.append(table_name)
-                                skip = True
-                        # Create ALTER statements => TEST it via EMR first.
-                        if not skip:
-                            if added_cols_dlist or del_cols_dlist:
-                                _update_table_schema(glue, table=tbl_details,
-                                                     new_cols=added_cols_dlist,
-                                                     del_cols=del_cols_dlist)
-                            else:
-                                print(f"Update is not required for `{table_name}`")
-                        else:
-                            print(f"skipping schema update for table: "
-                                  f"{table_name} due to data type change detected for columns.")
                     else:
-                        if move_to_next:
-                            print(f"{table_name} doesn't exist in the system.")
-                        if skip:
-                            print(f"Initial Validation failed or Change in partition column detected for {table_name}")
-                else:
-                    print(f"skipping schema update for table: {table_name} due to initial validation failure")
+                        # run initial checks on HQL
+                        print("Running initial validation.")
+                        validation_results = _intial_checks(data)
+                        if validation_results:
+                            print(f"Initial validations are successful for {table_name}.")
+                        else:
+                            print(f"Initial validation failed for provided HQL {table_name}.")
+                            skipped_tables.append(table_name)
+                            skip = True
+                    if not skip:
+                        # get table details from glue catalog
+                        tbl_details = _get_table_details(glue, db, table)
+                        if isinstance(tbl_details, dict):
+                            if 'Error' in tbl_details:
+                                # in case table doesn't exist in Glue catalog
+                                new_tables.append(table_name)
+                                move_to_next = True
+                            else:
+                                partition_keys = tbl_details['Table']['PartitionKeys']
+                                fetched_loc = tbl_details['Table']['StorageDescriptor']['Location']
+                                columns = tbl_details['Table']['StorageDescriptor']['Columns']
+                                # run initial checks
+                                catalog_validation = _intial_checks(tbl_details)
+                                if catalog_validation:
+                                    print("Initial validation for catalog passed.")
+                                else:
+                                    skipped_tables.append(table_name)
+                                    skip = True
+                                    print("Initial validation for catalog failed.")
+                                # run partition column check
+                                partition_validation = partition_col_check(data, partition_keys)
+                                if partition_validation:
+                                    print(f"Partition Validation passed for {table_name}.")
+                                else:
+                                    skipped_tables.append(table_name)
+                                    skip = True
+                                    print(f"Partition Validation failed for {table_name}.")
+                        if not move_to_next and not skip:
+                            # Fetch all the columns from HQL file:
+                            hql_cols = re.findall(column_rgs, data, flags=re.IGNORECASE)
+                            hql_col_dlist = [{'Name': col[0], 'Type': col[1]} for col in hql_cols]
+
+                            # getting all the columns from glue catalog
+                            catalog_col_list = columns + partition_keys
+
+                            # Schema comparison logic ==>
+                            new_df = pd.DataFrame(hql_col_dlist)
+                            old_df = pd.DataFrame(catalog_col_list)
+
+                            new_df["From"] = "new"
+                            old_df["From"] = "old"
+
+                            # includes added, deleted and data type changed columns
+                            new_cols_df = pd.concat([new_df, old_df]).drop_duplicates(['Name', 'Type'], keep=False)
+
+                            # getting columns with data type change
+                            dtype_changes = new_cols_df[new_cols_df.duplicated(['Name'], keep='first')]['Name'].to_list()
+
+                            # added and deleted columns
+                            remaining_cols = new_cols_df[~new_cols_df['Name'].isin(dtype_changes)]
+
+                            # new columns
+                            added_cols_dlist = remaining_cols[remaining_cols['From'] == 'new'][['Name', 'Type']].to_dict(
+                                'records')
+                            # deleted columns
+                            del_cols_dlist = remaining_cols[remaining_cols['From'] == 'old'][['Name', 'Type']].to_dict(
+                                'records')
+
+                            # print(remaining_cols)
+                            print("Newly Added columns ==>", added_cols_dlist)
+                            print("Removed columns ===>", del_cols_dlist)
+
+                            # TODO: print columns with data type changes
+                            if dtype_changes:
+                                print("data type changes records for: ", dtype_changes)
+                                # check fordata type compatibility
+                                new_dtype_df = new_cols_df[new_cols_df['Name'].isin(dtype_changes)]
+                                old_dtype_df = old_df[old_df['Name'].isin(dtype_changes)]
+                                merged_df = new_dtype_df.merge(old_dtype_df, on=['Name'], suffixes=("_new", "_old"))
+                                print(f"Skipping schema update for {table_name}")
+                                response = check_dtype_compatibility(merged_df)
+                                if not response:
+                                    print(f"Skipping schema update for {table_name}")
+                                    skipped_tables.append(table_name)
+                                    skip = True
+                            # Create ALTER statements => TEST it via EMR first.
+                            if not skip:
+                                if added_cols_dlist or del_cols_dlist:
+                                    _update_table_schema(glue, table=tbl_details,
+                                                         new_cols=added_cols_dlist,
+                                                         del_cols=del_cols_dlist)
+                                else:
+                                    print(f"Update is not required for `{table_name}`")
+                            else:
+                                print(f"skipping schema update for table: "
+                                      f"{table_name} due to data type change detected for columns.")
+                        else:
+                            if move_to_next:
+                                print(f"{table_name} doesn't exist in the system.")
+                            if skip:
+                                print(f"Initial Validation failed or Change in partition column detected for {table_name}")
+                    else:
+                        print(f"skipping schema update for table: {table_name} due to initial validation failure")
         # TODO: make these usable somehow for next step instead of just printing ?? can be integrated with SNS if needed
         print("skipped tables: ", skipped_tables)
-        print("new tables:", new_tables) # can be used for creating new tables directly
+        print("new tables:", new_tables)  # can be used for creating new tables directly
     except Exception as e:
         raise e
