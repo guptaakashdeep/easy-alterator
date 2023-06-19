@@ -8,7 +8,7 @@ from botocore.exceptions import ClientError
 import pandas as pd
 from copy import deepcopy
 from os import popen
-from .rule_book import *
+from rules import rule_book as r
 
 
 def _get_bucket_key(s3_path):
@@ -213,7 +213,7 @@ def _intial_checks(table_info):
     # 1. TABLE_TYPE is EXTERNAL
     # 2. TABLE IS A PARQUET TABLE => check serde info
     # 3. NO PARTITION COLUMNS ARE CHANGED (ADDED or REMOVED)
-    for key, value in INITIAL_RULE_DICT.items():
+    for key, value in r.INITIAL_RULE_DICT.items():
         result = value(table_info)
         if not result:
             print(f"{key} validation failed.")
@@ -396,7 +396,7 @@ if __name__ == "__main__":
                                     skip = True
                                     print("Initial validation for catalog failed.")
                                 # run partition column check
-                                partition_validation = partition_col_check(data, partition_keys)
+                                partition_validation = r.partition_col_check(data, partition_keys)
                                 if partition_validation:
                                     print(f"Partition Validation passed for {table_name}.")
                                 else:
@@ -446,7 +446,7 @@ if __name__ == "__main__":
                                 old_dtype_df = old_df[old_df['Name'].isin(dtype_changes)]
                                 merged_df = new_dtype_df.merge(old_dtype_df, on=['Name'], suffixes=("_new", "_old"))
                                 print(f"Skipping schema update for {table_name}")
-                                response = check_dtype_compatibility(merged_df)
+                                response = r.check_dtype_compatibility(merged_df)
                                 if not response:
                                     print(f"Skipping schema update for {table_name}")
                                     skipped_tables.append(table_name)

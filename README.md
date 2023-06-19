@@ -12,7 +12,7 @@ There are some checks implemented in place that checks if the table being update
 4. `Partition Columns` are not changed.
 5. `data type` compatibility in case of data type fo table is changed.
 
-### Athena Query Engines
+### Athena Query Engine
  Origina Datatype | Available Target Datatype | 
 | --- | ----------- |
 |STRING|BYTE, TINYINT, SMALLINT, INT, BIGINT
@@ -67,6 +67,11 @@ ROW FORMAT SERDE 'org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe'
 STORED AS INPUTFORMAT 'org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat'
 OUTPUTFORMAT 'org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat'
 LOCATION "s3://<bucket>/<key>";
+```
+- Note: If your Location in DDL has `aws_account_id` mentioned in path, you can mention it as `{aws_account_id}` which will be replaced by the actual aws account id automatically in case the code is running on EMR using the curl command:
+``` python
+aws_account_id = str(popen(
+        "curl -s http://169.254.169.254/latest/dynamic/instance-identity/document | jq -r .accountId").read().strip())
 ```
 
 ### YAML CONFIG
