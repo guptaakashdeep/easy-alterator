@@ -95,6 +95,7 @@ tables:
 |`-cp or --key_for_path`|Key in DDL config file for reading path to DDL folder.|Yes if `-c` is used and `-p` is not used| In case of `--config` is used, it is required to provide the path of the folder from where these table DDL's need to be read, this path can either be provided via `--path or -p` or a key in `YAML` config file. In later case that key needs to be provided as `-cp <key-name>`
 |`-fs or --file_suffix`|Suffix for DDL files to be picked from path. Default is `hql`|No| For filtering type of DDL files based on prefix. Possible values: `hql`, `txt`
 |`-fp or --file_prefix`|Prefix for DDL files to be picked from path.|No| For filtering type of DDL files based on suffix.
+|`--validate`|To check how the actual run will impact the tables. Doesn't update anything in tables.|No|More like a dry run of all the changes and getting details of what all columns will be updated/removed/added as a part of actual run with the provided configuration.
 
 # FAQs
 

@@ -288,6 +288,8 @@ if __name__ == "__main__":
                         help="Suffix for DDL files to be picked from path.")
     parser.add_argument("-fp", "--file_prefix", type=str, required=False, default="",
                         help="Prefix for DDL files to be picked from path.")
+    parser.add_argument("--validate", action='store_true', required=False, 
+                        help="To check how the actual run will impact the tables. Doesn't update anything in tables.")
 
     # print(sys.argv)
     args = parser.parse_args()
@@ -296,6 +298,7 @@ if __name__ == "__main__":
     path_key = args.key_for_path
     ddl_file_suffix = args.file_suffix
     ddl_file_prefix = args.file_prefix
+    validate = args.validate
 
     hql_paths = []
     config = None
@@ -445,7 +448,7 @@ if __name__ == "__main__":
                                 new_dtype_df = new_cols_df[new_cols_df['Name'].isin(dtype_changes)]
                                 old_dtype_df = old_df[old_df['Name'].isin(dtype_changes)]
                                 merged_df = new_dtype_df.merge(old_dtype_df, on=['Name'], suffixes=("_new", "_old"))
-                                print(f"Skipping schema update for {table_name}")
+                                print(f"****Validating data type compatibility for {table_name}****")
                                 response = r.check_dtype_compatibility(merged_df)
                                 if not response:
                                     print(f"Skipping schema update for {table_name}")
@@ -454,14 +457,19 @@ if __name__ == "__main__":
                             # Create ALTER statements => TEST it via EMR first.
                             if not skip:
                                 if added_cols_dlist or del_cols_dlist:
-                                    _update_table_schema(glue, table=tbl_details,
-                                                         new_cols=added_cols_dlist,
-                                                         del_cols=del_cols_dlist)
+                                    if not validate:
+                                        _update_table_schema(glue, table=tbl_details,
+                                                            new_cols=added_cols_dlist,
+                                                            del_cols=del_cols_dlist)
+                                    else:
+                                        print("***Table will be updated with the identified changes.***")
                                 else:
                                     print(f"Update is not required for `{table_name}`")
                             else:
-                                print(f"skipping schema update for table: "
-                                      f"{table_name} due to data type change detected for columns.")
+                                if not validate:
+                                    print(f"skipping schema update for table: {table_name}")
+                                else:
+                                    print(f"schema update for table: {table_name} will be skipped.")
                         else:
                             if move_to_next:
                                 print(f"{table_name} doesn't exist in the system.")
