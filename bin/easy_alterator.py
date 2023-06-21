@@ -323,7 +323,7 @@ if __name__ == "__main__":
         else:
             raise Exception("Please provide configuration file path with filename.")
 
-    print("DDL paths:", hql_paths)
+    print("=> DDL paths:", hql_paths)
 
     # Extract files from path as per the suffix and prefix provided.
     if config:
@@ -360,22 +360,22 @@ if __name__ == "__main__":
                     db, table = table_match.groups()
                     table_name = f'{db}.{table}'
                 else:
-                    print(f"Please validate the DDL format for {fname}")
+                    print(f"==> Please validate the DDL format for {fname}")
                     skip = True
                 if not skip:
                     # Check if hql is create statement.
                     if not data.startswith("create"):
-                        print(f"HQL provided for {table_name} is not a create statement.")
+                        print(f"==> HQL provided for {table_name} is not a create statement.")
                         skipped_tables.append(table_name)
                         skip = True
                     else:
                         # run initial checks on HQL
-                        print("Running initial validation.")
+                        print("*** Running initial validation.***")
                         validation_results = _intial_checks(data)
                         if validation_results:
-                            print(f"Initial validations are successful for {table_name}.")
+                            print(f"=> Initial validations are successful for {table_name}.")
                         else:
-                            print(f"Initial validation failed for provided HQL {table_name}.")
+                            print(f"==> Initial validation failed for provided HQL {table_name}.")
                             skipped_tables.append(table_name)
                             skip = True
                     if not skip:
@@ -393,19 +393,19 @@ if __name__ == "__main__":
                                 # run initial checks
                                 catalog_validation = _intial_checks(tbl_details)
                                 if catalog_validation:
-                                    print("Initial validation for catalog passed.")
+                                    print("=> Initial validation for catalog passed.")
                                 else:
                                     skipped_tables.append(table_name)
                                     skip = True
-                                    print("Initial validation for catalog failed.")
+                                    print("==> Initial validation for catalog failed.")
                                 # run partition column check
                                 partition_validation = r.partition_col_check(data, partition_keys)
                                 if partition_validation:
-                                    print(f"Partition Validation passed for {table_name}.")
+                                    print(f"=> Partition Validation passed for {table_name}.")
                                 else:
                                     skipped_tables.append(table_name)
                                     skip = True
-                                    print(f"Partition Validation failed for {table_name}.")
+                                    print(f"==> Partition Validation failed for {table_name}.")
                         if not move_to_next and not skip:
                             # Fetch all the columns from HQL file:
                             hql_cols = re.findall(column_rgs, data, flags=re.IGNORECASE)
@@ -437,9 +437,9 @@ if __name__ == "__main__":
                             del_cols_dlist = remaining_cols[remaining_cols['From'] == 'old'][['Name', 'Type']].to_dict(
                                 'records')
 
-                            # print(remaining_cols)
-                            print("Newly Added columns ==>", added_cols_dlist)
-                            print("Removed columns ===>", del_cols_dlist)
+                            # TODO: return these thi
+                            print("+++ Newly Added columns ==>", added_cols_dlist)
+                            print("--- Deleted columns ===>", del_cols_dlist)
 
                             # TODO: print columns with data type changes
                             if dtype_changes:
@@ -451,7 +451,7 @@ if __name__ == "__main__":
                                 print(f"****Validating data type compatibility for {table_name}****")
                                 response = r.check_dtype_compatibility(merged_df)
                                 if not response:
-                                    print(f"Skipping schema update for {table_name}")
+                                    print(f"==> Skipping schema update for {table_name}")
                                     skipped_tables.append(table_name)
                                     skip = True
                             # Create ALTER statements => TEST it via EMR first.
@@ -462,21 +462,24 @@ if __name__ == "__main__":
                                                             new_cols=added_cols_dlist,
                                                             del_cols=del_cols_dlist)
                                     else:
-                                        print("***Table will be updated with the identified changes.***")
+                                        print("=> Table will be updated with the identified changes.")
                                 else:
-                                    print(f"Update is not required for `{table_name}`")
+                                    print(f"=> Update is not required for `{table_name}`")
                             else:
                                 if not validate:
-                                    print(f"skipping schema update for table: {table_name}")
+                                    print(f"==> skipping schema update for table: {table_name}")
                                 else:
-                                    print(f"schema update for table: {table_name} will be skipped.")
+                                    print(f"==> schema update for table: {table_name} will be skipped.")
                         else:
                             if move_to_next:
-                                print(f"{table_name} doesn't exist in the system.")
+                                print(f"==> {table_name} doesn't exist in the system.")
                             if skip:
-                                print(f"Initial Validation failed or Change in partition column detected for {table_name}")
+                                print(f"==> Initial Validation failed or Change in partition column detected for {table_name}")
                     else:
-                        print(f"skipping schema update for table: {table_name} due to initial validation failure")
+                        print(f"==> skipping schema update for table: {table_name} due to initial validation failure")
+                else:
+                    print("==> Skipping schema update for table due to incorrect DDL Format: ", table_name)
+            print("###### Process finished for {fname} ######")
         # TODO: make these usable somehow for next step instead of just printing ?? can be integrated with SNS if needed
         print("skipped tables: ", skipped_tables)
         print("new tables:", new_tables)  # can be used for creating new tables directly

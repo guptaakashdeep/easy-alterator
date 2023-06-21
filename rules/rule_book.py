@@ -42,7 +42,7 @@ def parquet_check(table_obj):
             )
         return False
     elif isinstance(table_obj, str):
-        print("inside string PV")
+        # print("inside string PV")
         store_regex = "STORED\s+AS\s+(\w+)"
         match = re.search(store_regex, table_obj, flags=re.IGNORECASE)
         if match:
@@ -50,11 +50,11 @@ def parquet_check(table_obj):
             if stored_as == "parquet":
                 return True
             elif stored_as == "inputformat":
-                print("check for serde's here")
+                print("=> checking for serde's")
                 row_fmt_regex = "ROW\s+FORMAT\s+SERDE\s+'([\w\.]+)'"
                 row_fmt_match = re.search(row_fmt_regex, table_obj, flags=re.IGNORECASE)
                 if row_fmt_match:
-                    print("ROW FORMAT MATCHES..!!")
+                    print("=> ROW FORMAT MATCHES..!!")
                     if row_fmt_match.group(1) == PARQUET_ROW_FORMAT.lower():
                         input_serde_regex = "INPUTFORMAT\s+'([\w\.]+)'"
                         input_serde_match = re.search(
@@ -69,7 +69,7 @@ def parquet_check(table_obj):
                                 1) == OUTPUT_SERDE.lower() else False
                         else:
                             print(
-                                "INPUT/OUTPUT SERDE isn't Parquet SERDE ==>",
+                                "==> INPUT/OUTPUT SERDE isn't Parquet SERDE: ",
                                 input_serde_match.group(1),
                                 "\n",
                                 output_serde_match.group(1),
@@ -121,9 +121,9 @@ def check_dtype_compatibility(df, query_engine="athena"):
         lambda x: True if x["Type_new"].upper() in compatibility_dict.get(x["Type_old"].upper(), []) else False, axis=1)
     incompatible_cols = df[df["compatible"] is False]
     if not incompatible_cols.empty:
-        print("Incompatible data type change found in the DDL: ")
-        print(incompatible_cols.apply(lambda row: f'{row["Name"]} data type changed from {row["Type_old"]} to {row["Type_new"]}', axis=1))
-        print("Please change the data type of the following columns to the compatible data type.")
+        print("==> Incompatible data type change found in the DDL: ")
+        print(incompatible_cols.apply(lambda row: f'{row["Name"].item()} data type changed from {row["Type_old"].item()} to {row["Type_new"].item()}', axis=1))
+        print("==> Please change the data type of the following columns to the compatible data type.")
         return False
     return True
 
