@@ -208,7 +208,6 @@ def _intial_checks(table_info):
     :param table_info: dict
     :return: bool
     """
-    print("run some checks before table updates")
     # RULES:
     # 1. TABLE_TYPE is EXTERNAL
     # 2. TABLE IS A PARQUET TABLE => check serde info
@@ -223,6 +222,13 @@ def _intial_checks(table_info):
 
 
 def _get_table_details(client, database, table):
+    """
+    Gets the table details from the AWS Glue catalog.
+    :param client: boto3 client
+    :param database: str
+    :param table: str
+    :return: dict
+    """
     try:
         response = client.get_table(
             DatabaseName=database,
@@ -240,6 +246,14 @@ def _get_table_details(client, database, table):
 
 
 def _update_table_schema(glue_client, table, new_cols, del_cols):
+    """
+    Update the table schema in AWS Glue catalog.
+    :param client: boto3 glue client
+    :param table: str
+    :param new_cols: list of dict
+    :param del_cols: list of dict
+    :return:
+    """
     updated_table = deepcopy(table)
     db_name = table['Table']['DatabaseName']
     table_name = table['Table']['Name']
@@ -437,7 +451,7 @@ if __name__ == "__main__":
                             del_cols_dlist = remaining_cols[remaining_cols['From'] == 'old'][['Name', 'Type']].to_dict(
                                 'records')
 
-                            # TODO: return these thi
+                            # TODO: Improve something here
                             print("+++ Newly Added columns ==>", added_cols_dlist)
                             print("--- Deleted columns ===>", del_cols_dlist)
 
@@ -478,8 +492,8 @@ if __name__ == "__main__":
                     else:
                         print(f"==> skipping schema update for table: {table_name} due to initial validation failure")
                 else:
-                    print("==> Skipping schema update for table due to incorrect DDL Format: ", table_name)
-            print("###### Process finished for {fname} ######")
+                    print("==> Skipping schema update for table due to incorrect DDL Format in: ", fname)
+            print(f"###### Process finished for {fname} ######")
         # TODO: make these usable somehow for next step instead of just printing ?? can be integrated with SNS if needed
         print("skipped tables: ", skipped_tables)
         print("new tables:", new_tables)  # can be used for creating new tables directly
