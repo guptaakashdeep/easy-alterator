@@ -291,7 +291,7 @@ def _update_table_schema(glue_client, table, new_cols, del_cols):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-p", "--path", nargs='*', required='--config' not in sys.argv and '-c' not in sys.argv,
-                        help="Paths to DDL folder separated by comma.")
+                        help="Paths to DDL folder separated by space.")
     parser.add_argument("-c", "--config", type=str, required='--path' not in sys.argv and '-p' not in sys.argv,
                         help="DDL config yaml.")
     parser.add_argument("-cp", "--key_for_path", type=str,

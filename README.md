@@ -90,7 +90,7 @@ tables:
 | Parameters | Usage | Is Mandatory ? | Any Additional condition | 
 |----------|--------|------|-------|
 |`-h or --help` | To get the details of all the parameters | No |
-|`-p or --path`| To provide the paths to DDL files folder separated by `comma (,)` or Path to DDL files separated by `comma (,)`.|Yes if `-c` is not used.|
+|`-p or --path`| To provide the paths to DDL files folder separated by `space` or Path to DDL files separated by `space`.|Yes if `-c` is not used.|
 |`-c or --config`|DDL config yaml|Yes if `-p` is not used| In case of selective multiple tables needs to be updated, all such table names can be provided as a `YAML` config file.
 |`-cp or --key_for_path`|Key in DDL config file for reading path to DDL folder.|Yes if `-c` is used and `-p` is not used| In case of `--config` is used, it is required to provide the path of the folder from where these table DDL's need to be read, this path can either be provided via `--path or -p` or a key in `YAML` config file. In later case that key needs to be provided as `-cp <key-name>`
 |`-fs or --file_suffix`|Suffix for DDL files to be picked from path. Default is `hql`|No| For filtering type of DDL files based on prefix. Possible values: `hql`, `txt`
