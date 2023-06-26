@@ -349,7 +349,7 @@ if __name__ == "__main__":
     glue = boto3.client('glue')
 
     table_rgx = "TABLE [IF NOT EXISTS]*\s*`(\w+)[\.](\w+)`"
-    column_rgs = "`(\w+)`\s+(\w+),*"
+    column_rgs = "`(\w+)`\s+(\w+(\(\d+,\d+\))?),*"
     skipped_tables = []
     new_tables = []
 
