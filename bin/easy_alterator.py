@@ -153,7 +153,7 @@ def _filter_files(paths, prefix, suffix, **kwargs):
         # if the path is a directory, filtering all the files starting with prefix and suffix in file.
         if (not path.startswith("s3://")) and os.path.isdir(path):
             files_list = os.listdir(path)
-        elif path.startswith("s3://"):
+        elif path.startswith("s3://") and len(path.split(".")) == 1:
             is_cloud_path = True
             files_list = _list_s3_objects(path)
         else:
