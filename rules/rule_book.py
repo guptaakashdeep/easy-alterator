@@ -119,10 +119,11 @@ def check_dtype_compatibility(df, query_engine="athena"):
     compatibility_dict = QUERY_ENG_DTYPE_COMPATIBILITY[query_engine]
     df["compatible"] = df.apply(
         lambda x: True if x["Type_new"].upper() in compatibility_dict.get(x["Type_old"].upper(), []) else False, axis=1)
-    incompatible_cols = df[df["compatible"] is False]
+    incompatible_cols = df[df["compatible"] == False]
     if not incompatible_cols.empty:
         print("==> Incompatible data type change found in the DDL: ")
-        print(incompatible_cols.apply(lambda row: f'{row["Name"].item()} data type changed from {row["Type_old"].item()} to {row["Type_new"].item()}', axis=1))
+        for row in incompatible_cols.to_dict(orient="records"):
+            print(f'{row["Name"]} data type changed from {row["Type_old"]} to {row["Type_new"]}')
         print("==> Please change the data type of the following columns to the compatible data type.")
         return False
     return True
