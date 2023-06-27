@@ -171,12 +171,14 @@ def _filter_files(paths, prefix, suffix, **kwargs):
                 if is_cloud_path:
                     cloud_filenames = [f.rsplit("/", 1)[1] for f in filtered_files]
                     final_list = list(filter(lambda name: name is not None,
-                                             [f'{prefix}{x}.{suffix}' if f'{prefix}{x}.{suffix}' in cloud_filenames else None
+                                             [
+                                                 f'{prefix}{x}.{suffix}' if f'{prefix}{x}.{suffix}' in cloud_filenames else None
                                                  for x in table_list]))
                 else:
                     final_list = list(filter(lambda name: name is not None,
-                                             [f'{prefix}{x}.{suffix}' if f'{prefix}{x}.{suffix}' in filtered_files else None
-                                              for x in table_list]))
+                                             [
+                                                 f'{prefix}{x}.{suffix}' if f'{prefix}{x}.{suffix}' in filtered_files else None
+                                                 for x in table_list]))
             else:
                 final_list = filtered_files
             # TODO: need to add support for Windows OS ?? Supports only linux FS as of now.
@@ -221,7 +223,7 @@ def _intial_checks(table_info):
     return True
 
 
-def _get_table_details(client, database, table):
+def _get_table_details(database, table):
     """
     Gets the table details from the AWS Glue catalog.
     :param client: boto3 client
@@ -230,6 +232,7 @@ def _get_table_details(client, database, table):
     :return: dict
     """
     try:
+        client = boto3.client('glue')
         response = client.get_table(
             DatabaseName=database,
             Name=table
@@ -245,15 +248,16 @@ def _get_table_details(client, database, table):
         raise e
 
 
-def _update_table_schema(glue_client, table, new_cols, del_cols):
+def _update_table_schema(table, new_cols, del_cols):
     """
     Update the table schema in AWS Glue catalog.
     :param client: boto3 glue client
-    :param table: str
+    :param table: dict
     :param new_cols: list of dict
     :param del_cols: list of dict
     :return:
     """
+    glue_client = boto3.client('glue')
     updated_table = deepcopy(table)
     db_name = table['Table']['DatabaseName']
     table_name = table['Table']['Name']
@@ -288,11 +292,58 @@ def _update_table_schema(glue_client, table, new_cols, del_cols):
         print(f"Update failure for {db_name}.{table_name}")
 
 
+def _compare_schema(new_col_list, old_col_list):
+    # Schema comparison logic ==>
+    new_df = pd.DataFrame(new_col_list)
+    old_df = pd.DataFrame(old_col_list)
+
+    new_df["From"] = "new"
+    old_df["From"] = "old"
+
+    # includes added, deleted and data type changed columns
+    combined_cols_df = pd.merge(new_df, old_df, on=["Name"], how="outer",
+                                suffixes=("_new", "_old"))[["Name", "Type_new", "Type_old"]]
+
+    # new columns df
+    new_cols_df = combined_cols_df[combined_cols_df["Type_old"].isna()]
+    # print("new df \n", new_cols_df)
+
+    # deleted columns df
+    deleted_cols_df = combined_cols_df[combined_cols_df["Type_new"].isna()]
+    # print("deleted df \n",deleted_cols_df)
+
+    # getting columns with data type change
+    datatype_changes = combined_cols_df[(~combined_cols_df["Type_old"].isna()) &
+                                        (~combined_cols_df["Type_new"].isna()) &
+                                        (combined_cols_df["Type_old"] != combined_cols_df["Type_new"])
+                                        ]
+    # print("datatype changes \n", datatype_changes)
+
+    # new columns
+    added_cols = new_cols_df.rename(columns={'Type_new': 'Type'})[['Name', 'Type']].to_dict('records')
+    # deleted columns
+    deleted_cols = deleted_cols_df.rename(columns={'Type_old': 'Type'})[['Name', 'Type']].to_dict('records')
+
+    # TODO: Improve something here
+    print("++++ Newly Added columns ==>", added_cols)
+    print("---- Deleted columns ===>", deleted_cols)
+    print("++++ New columns count ==>", len(added_cols))
+    print("---- Deleted columns count ===>", len(deleted_cols))
+
+    # TODO: print columns with data type changes
+    if not datatype_changes.empty:
+        print("+-+- data type changes records for: ", datatype_changes["Name"].to_list())
+        # check for data type compatibility
+    return added_cols, deleted_cols, datatype_changes
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("-p", "--path", nargs='*', required='--config' not in sys.argv and '-c' not in sys.argv,
+    parser.add_argument("-p", "--path", nargs='*', required='--config' not in sys.argv and '-c' not in sys.argv
+                                                            and '--sync' not in sys.argv,
                         help="Paths to DDL folder separated by space.")
-    parser.add_argument("-c", "--config", type=str, required='--path' not in sys.argv and '-p' not in sys.argv,
+    parser.add_argument("-c", "--config", type=str, required='--path' not in sys.argv and '-p' not in sys.argv
+                                                             and '--sync' not in sys.argv,
                         help="DDL config yaml.")
     parser.add_argument("-cp", "--key_for_path", type=str,
                         required=('--path' not in sys.argv and '-p' not in sys.argv) and (
@@ -302,8 +353,15 @@ if __name__ == "__main__":
                         help="Suffix for DDL files to be picked from path.")
     parser.add_argument("-fp", "--file_prefix", type=str, required=False, default="",
                         help="Prefix for DDL files to be picked from path.")
-    parser.add_argument("--validate", action='store_true', required=False, 
+    parser.add_argument("--validate", action='store_true', required=False,
                         help="To check how the actual run will impact the tables. Doesn't update anything in tables.")
+    parser.add_argument("--sync", action='store_true', required=False, help="syncing schema for 2 tables.")
+    parser.add_argument("-src", "--source_table", type=str, required='--sync' in sys.argv,
+                        help="source table for sync option. Reference table for updating target table schema.")
+    parser.add_argument("-tgt", "--target_table", type=str, required='--sync' in sys.argv,
+                        help="target table for sync option. Table whose schema needs to be updated.")
+    parser.add_argument("-pcheck", "--partition_check", type=int, required=False, choices=[0, 1],
+                        help="Specifies if partition check is required during table syncing. Used with --sync. default is 1")
 
     # print(sys.argv)
     args = parser.parse_args()
@@ -313,6 +371,75 @@ if __name__ == "__main__":
     ddl_file_suffix = args.file_suffix
     ddl_file_prefix = args.file_prefix
     validate = args.validate
+    # sync functionality parameters
+    sync = args.sync
+    src = args.source_table
+    tgt = args.target_table
+    part_check = args.partition_check
+    if part_check is None:
+        part_check = 1
+
+    if sync:
+        print("##### SYNC TABLE PROCESS #####")
+        src_db, src_tbl = src.split(".")
+        tgt_db, tgt_tbl = tgt.split(".")
+        print(f"=> src details >> \n database: {src_db} \n table: {src_tbl}")
+        print(f"=> tgt details >> \n database: {tgt_db} \n table: {tgt_tbl}")
+        src_tbl_details = _get_table_details(src_db, src_tbl)
+        tgt_tbl_details = _get_table_details(tgt_db, tgt_tbl)
+        if isinstance(src_tbl_details, dict):
+            if 'Error' in src_tbl_details:
+                print("Error occured while fetching src schema: ", src_tbl_details['Error'])
+                raise Exception(src_tbl_details['Error'])
+        if isinstance(tgt_tbl_details, dict):
+            if 'Error' in tgt_tbl_details:
+                print("Error occured while fetching tgt schema: ", tgt_tbl_details['Error'])
+                raise Exception(tgt_tbl_details['Error'])
+        # running initial validations
+        src_validation = _intial_checks(src_tbl_details)
+        tgt_validation = _intial_checks(tgt_tbl_details)
+        if src_validation and tgt_validation:
+            print("=> Initial Validation Passed")
+            # compare partition columns
+            tgt_part_cols = tgt_tbl_details['Table']['PartitionKeys']
+            src_part_cols = src_tbl_details['Table']['PartitionKeys']
+            tgt_cols = tgt_part_cols + tgt_tbl_details['Table']['StorageDescriptor']['Columns']
+            src_cols = src_part_cols + src_tbl_details['Table']['StorageDescriptor']['Columns']
+            if part_check:
+                print("=> Partition Column check is enabled.")
+                result = r.partition_col_check(tgt_part_cols, src_part_cols)
+                if not result:
+                    raise Exception("Partition column check failed.")
+                else:
+                    print("=> Parition Column check passed.")
+            # Get columns that needs to be added or removed in tgt table as per src table to sync schema
+            new_cols, removed_cols, combined_df = _compare_schema(src_cols, tgt_cols)
+            print(combined_df)
+            if not combined_df.empty:
+                print(f"****Validating data type compatibility for {tgt}****")
+                response = r.check_dtype_compatibility(combined_df)
+                if not response:
+                    update_table = False
+                    raise Exception(f"Data type Validation failed for {tgt}")
+                else:
+                    update_table = True
+                    print(f"=> Data type Validation passed for {tgt}")
+            else:
+                update_table = True
+            # if all the checks are passed update the table if validation = False
+            if update_table:
+                if not validate:
+                    if new_cols or removed_cols:
+                        _update_table_schema(tgt_tbl_details, new_cols, removed_cols)
+                    else:
+                        print(f"=> nothing to update for {tgt}")
+                else:
+                    print("=> Validation completed. <=")
+        else:
+            raise Exception("Initial Validation Failed.")
+        print("##### SYNC TABLE PROCESS COMPLETED #####")
+        # exit and send success
+        sys.exit(0)
 
     hql_paths = []
     config = None
@@ -331,7 +458,8 @@ if __name__ == "__main__":
                     hql_paths.append(config[path_key])
                 else:
                     if not paths:
-                        raise Exception(f"Provided key_for_path is not available in {ddl_config_path} configuration file")
+                        raise Exception(
+                            f"Provided key_for_path is not available in {ddl_config_path} configuration file")
             else:
                 raise Exception("Only .yaml configuration files are supported.")
         else:
@@ -346,7 +474,7 @@ if __name__ == "__main__":
         final_file_list = _filter_files(hql_paths, ddl_file_prefix, ddl_file_suffix)
 
     # create aws glue client
-    glue = boto3.client('glue')
+    # glue = boto3.client('glue')
 
     table_rgx = "TABLE [IF NOT EXISTS]*\s*`(\w+)[\.](\w+)`"
     column_rgs = "`(\w+)`\s+(\w+(\(\d+,\d+\))?),*"
@@ -394,7 +522,7 @@ if __name__ == "__main__":
                             skip = True
                     if not skip:
                         # get table details from glue catalog
-                        tbl_details = _get_table_details(glue, db, table)
+                        tbl_details = _get_table_details(db, table)
                         if isinstance(tbl_details, dict):
                             if 'Error' in tbl_details:
                                 # in case table doesn't exist in Glue catalog
@@ -427,41 +555,11 @@ if __name__ == "__main__":
 
                             # getting all the columns from glue catalog
                             catalog_col_list = columns + partition_keys
-
-                            # Schema comparison logic ==>
-                            new_df = pd.DataFrame(hql_col_dlist)
-                            old_df = pd.DataFrame(catalog_col_list)
-
-                            new_df["From"] = "new"
-                            old_df["From"] = "old"
-
-                            # includes added, deleted and data type changed columns
-                            new_cols_df = pd.concat([new_df, old_df]).drop_duplicates(['Name', 'Type'], keep=False)
-
-                            # getting columns with data type change
-                            dtype_changes = new_cols_df[new_cols_df.duplicated(['Name'], keep='first')]['Name'].to_list()
-
-                            # added and deleted columns
-                            remaining_cols = new_cols_df[~new_cols_df['Name'].isin(dtype_changes)]
-
-                            # new columns
-                            added_cols_dlist = remaining_cols[remaining_cols['From'] == 'new'][['Name', 'Type']].to_dict(
-                                'records')
-                            # deleted columns
-                            del_cols_dlist = remaining_cols[remaining_cols['From'] == 'old'][['Name', 'Type']].to_dict(
-                                'records')
-
-                            # TODO: Improve something here
-                            print("+++ Newly Added columns ==>", added_cols_dlist)
-                            print("--- Deleted columns ===>", del_cols_dlist)
+                            added_cols_dlist, del_cols_dlist, merged_df = _compare_schema(hql_col_dlist,
+                                                                                          catalog_col_list)
 
                             # TODO: print columns with data type changes
-                            if dtype_changes:
-                                print("data type changes records for: ", dtype_changes)
-                                # check fordata type compatibility
-                                new_dtype_df = new_cols_df[new_cols_df['Name'].isin(dtype_changes)]
-                                old_dtype_df = old_df[old_df['Name'].isin(dtype_changes)]
-                                merged_df = new_dtype_df.merge(old_dtype_df, on=['Name'], suffixes=("_new", "_old"))
+                            if not merged_df.empty:
                                 print(f"****Validating data type compatibility for {table_name}****")
                                 response = r.check_dtype_compatibility(merged_df)
                                 if not response:
@@ -472,9 +570,9 @@ if __name__ == "__main__":
                             if not skip:
                                 if added_cols_dlist or del_cols_dlist:
                                     if not validate:
-                                        _update_table_schema(glue, table=tbl_details,
-                                                            new_cols=added_cols_dlist,
-                                                            del_cols=del_cols_dlist)
+                                        _update_table_schema(table=tbl_details,
+                                                             new_cols=added_cols_dlist,
+                                                             del_cols=del_cols_dlist)
                                     else:
                                         print("=> Table will be updated with the identified changes.")
                                 else:
@@ -488,7 +586,8 @@ if __name__ == "__main__":
                             if move_to_next:
                                 print(f"==> {table_name} doesn't exist in the system.")
                             if skip:
-                                print(f"==> Initial Validation failed or Change in partition column detected for {table_name}")
+                                print(
+                                    f"==> Initial Validation failed or Change in partition column detected for {table_name}")
                     else:
                         print(f"==> skipping schema update for table: {table_name} due to initial validation failure")
                 else:
