@@ -65,7 +65,8 @@ def parquet_check(table_obj):
                             output_serde_regex, table_obj, flags=re.IGNORECASE
                         )
                         if input_serde_match and output_serde_match:
-                            return True if input_serde_match.group(1) == INPUT_SERDE.lower() and output_serde_match.group(
+                            return True if input_serde_match.group(
+                                1) == INPUT_SERDE.lower() and output_serde_match.group(
                                 1) == OUTPUT_SERDE.lower() else False
                         else:
                             print(
@@ -87,26 +88,50 @@ def parquet_check(table_obj):
         return False
 
 
-def partition_col_check(hql_str, catalog_partn_cols):
+def partition_col_check(hql_str_dict, catalog_partn_cols):
     """
     Check if the partition columns are changed in provided table HQL.
     Compares the partition columns from the already existing column.
-    :param hql_str: hql string
+    :param hql_str_dict: hql string or partition cols list of dict
     :param catalog_partn_cols: already existing partition columns list
-    :return:
+    :return: bool
     """
-    partition_regex = "PARTITIONED\s+BY\s+\(([\w`\s,]+)\)"
-    match = re.search(partition_regex, hql_str, flags=re.IGNORECASE)
-    if match:
-        parition_cols = re.sub('\s+', ' ', match.group(1).lower().strip().replace('`','')).split(',')
-        hql_pcols = [{"Name": col.strip().split(' ')[0], "Type": col.strip().split(' ')[1]} for col in parition_cols]
-        hql_df = pd.DataFrame(hql_pcols)
-        catalog_df = pd.DataFrame(catalog_partn_cols)
-        diff_cols = pd.concat([hql_df, catalog_df]).drop_duplicates(keep=False)
-        if diff_cols.empty:
-            return True
+    if isinstance(hql_str_dict, list):
+        hql_df = pd.DataFrame(hql_str_dict)
+        print(hql_df)
+    else:
+        partition_regex = "PARTITIONED\s+BY\s+\(([\w`\s,]+)\)"
+        match = re.search(partition_regex, hql_str_dict, flags=re.IGNORECASE)
+        if match:
+            parition_cols = re.sub('\s+', ' ', match.group(1).lower().strip().replace('`', '')).split(',')
+            hql_pcols = [{"Name": col.strip().split(' ')[0], "Type": col.strip().split(' ')[1]} for col in
+                         parition_cols]
+            hql_df = pd.DataFrame(hql_pcols)
         else:
-            return False
+            hql_df = pd.DataFrame(columns=['Name', 'Type'])
+    catalog_df = pd.DataFrame(catalog_partn_cols)
+    if catalog_df.shape[0] == hql_df.shape[0]:
+        print("=> Column count matches")
+        # check for emptiness
+        if not hql_df.empty and not catalog_df.empty:
+            merged_df = pd.merge(hql_df, catalog_df, on=["Name"], how='outer', suffixes=("_new", "_old"))
+            if merged_df[merged_df['Type_new'].isna()].empty and merged_df[merged_df['Type_old'].isna()].empty:
+                print("=> parition column names are same")
+                # Check for types
+                if merged_df[merged_df['Type_new'] == merged_df['Type_old']].shape[0] == hql_df.shape[0]:
+                    return True
+                else:
+                    print("=> Partition column data type mismatch.")
+                    return False
+            else:
+                print("Partition column mismatch.")
+                return False
+        else:
+            print("=> No paritions found.")
+            return True
+    else:
+        print("=> Partitions column mismatch")
+        return False
 
 
 def check_dtype_compatibility(df, query_engine="athena"):
