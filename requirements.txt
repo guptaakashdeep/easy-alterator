@@ -1,0 +1,4 @@
+boto3==1.26.147
+botocore==1.29.147
+pandas==2.0.2
+PyYAML==6.0
