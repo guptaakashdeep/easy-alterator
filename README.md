@@ -38,7 +38,7 @@ Idea behind creating Easy Alterator is to provide ability to ADD/DROP/REPLACE/CH
 # Usage
 
 ```bash
-python3 easy_alterator.py -p /home/hadoop/ddl/,/home/hadoop/hql/xyz.hql 
+python3 easy_alterator.py -p /home/hadoop/ddl/ /home/hadoop/hql/xyz.hql 
 ```
 
 ## Pre-requisites
