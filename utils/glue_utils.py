@@ -30,11 +30,12 @@ def get_table_details(database, table):
 def update_table_schema(table, new_cols, del_cols):
     """
     Update the table schema in AWS Glue catalog.
+    Returns the update status as True, False along with db.table_name
     :param client: boto3 glue client
     :param table: dict
     :param new_cols: list of dict
     :param del_cols: list of dict
-    :return:
+    :return: tuple: (Bool, string, dict)
     """
     glue_client = boto3.client("glue")
     updated_table = deepcopy(table)
@@ -72,8 +73,10 @@ def update_table_schema(table, new_cols, del_cols):
         DatabaseName=db_name, TableInput=updated_table["Table"]
     )
 
-    # TODO: instead of print return a dictionary or some response ?
+    # Check if the update is successful or not.
     if up_response["ResponseMetadata"]["HTTPStatusCode"] == 200:
         print(f"Update successful for {db_name}.{table_name}")
+        return True, f"{db_name}.{table_name}", None
     else:
         print(f"Update failure for {db_name}.{table_name}")
+        return False, f"{db_name}.{table_name}", up_response["Error"]

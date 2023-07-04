@@ -100,12 +100,18 @@ if __name__ == "__main__":
         part_check = 1
 
     if sync:
-        sync_tables(src, tgt, part_check, validate)
-        # exit and send success
-        sys.exit(0)
+        try:
+            sync_tables(src, tgt, part_check=part_check, validate=validate)
+            print("Sync completed successfully.")
+            # exit and send success
+            sys.exit(0)
+        except Exception as ex:
+            print("Error occured while running sync.")
+            print(ex)
+            raise ex
 
     try:
-        alterator(
+        response = alterator(
             paths=paths,
             ddl_config_path=ddl_config_path,
             path_key=path_key,
@@ -113,7 +119,8 @@ if __name__ == "__main__":
             ddl_file_suffix=ddl_file_suffix,
             validate=validate,
         )
+        print(response)
     except Exception as ex:
         print("Error occured while running alterator.")
         print(ex)
-        sys.exit(1)
+        raise ex

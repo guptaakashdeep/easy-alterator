@@ -8,19 +8,21 @@ from utils import file_utils as futils
 from utils import s3_utils as s3utils
 
 
-def sync_tables(src, tgt, part_check, validate):
-    """_summary_
-
+def sync_tables(src, tgt, **kwargs):
+    """Main SYNC functionality method for syncing the 
+    target table schema with source table schema.
     Args:
-        src (_type_): _description_
-        tgt (_type_): _description_
-        part_check (_type_): _description_
-        validate (_type_): _description_
-
+        src (str): Source table name with database
+        tgt (str): Target table name with database.
+        **kwargs : optional Arguments:
+            validate (bool): Flag to validate the sync process.
+            part_check (int): Flag to check partition columns.
     Raises:
-        Exception: _description_
-    """
+        Exception: Generic exception in case of failures
+    """           
     print("##### SYNC TABLE PROCESS #####")
+    validate = kwargs.get("validate", False)
+    part_check = kwargs.get("part_check", 1)
     src_db, src_tbl = src.split(".")
     tgt_db, tgt_tbl = tgt.split(".")
     print(f"=> src details >> \n database: {src_db} \n table: {src_tbl}")
@@ -80,7 +82,14 @@ def sync_tables(src, tgt, part_check, validate):
         if update_table:
             if not validate:
                 if new_cols or removed_cols:
-                    glue.update_table_schema(tgt_tbl_details, new_cols, removed_cols)
+                    status, table, error_dict = glue.update_table_schema(
+                        tgt_tbl_details, new_cols, removed_cols
+                    )
+                    if not status:
+                        raise Exception(
+                            f"""Schema update failed for {table}
+                                        due to {error_dict['Code']}: {error_dict['Message']}"""
+                        )
                 else:
                     print(f"=> nothing to update for {tgt}")
             else:
@@ -91,6 +100,24 @@ def sync_tables(src, tgt, part_check, validate):
 
 
 def alterator(**kwargs):
+    """Main ALTERATOR functionality method for altering the table schema.
+    Args:
+        **kwargs : optional Arguments:
+            paths (list): List of paths to read the DDL files.
+            ddl_config_path (str): Path to read the DDL configuration file.
+            path_key (str): Key for path in DDL configuration file.
+            ddl_file_prefix (str): Prefix for DDL files.
+            ddl_file_suffix (str): Suffix for DDL files.
+            validate (bool): Flag to validate the sync process.
+            part_check (int): Flag to check partition columns.
+    Raises:
+        Exception: Generic exception in case of failures
+
+    Returns:
+        dict: Dictionary with table segregation 
+              into success, errored, skipped and new with keys: 
+              success_tables, errored_tables, skipped_tables and new_tables.
+    """         
     paths = kwargs.get("paths")
     ddl_config_path = kwargs.get("ddl_config_path")
     path_key = kwargs.get("path_key")
@@ -139,6 +166,8 @@ def alterator(**kwargs):
     column_rgs = r"""`(\w+)`\s+(\w+(\(\d+,\d+\))?),*"""
     skipped_tables = []
     new_tables = []
+    success_tables = []
+    errored_tables = []
 
     # Fetching AWS ID from EMR
     aws_account_id = hfunc.get_account_id()
@@ -156,7 +185,10 @@ def alterator(**kwargs):
             else:
                 with open(fname, "r", encoding="utf-8") as filestream:
                     data = (
-                        filestream.read().lower().strip().format(aws_account_id=aws_account_id)
+                        filestream.read()
+                        .lower()
+                        .strip()
+                        .format(aws_account_id=aws_account_id)
                     )
             if data:
                 table_match = re.search(table_rgx, data, flags=re.IGNORECASE)
@@ -255,11 +287,21 @@ def alterator(**kwargs):
                             if not skip:
                                 if added_cols_dlist or del_cols_dlist:
                                     if not validate:
-                                        glue.update_table_schema(
+                                        status, _, error = glue.update_table_schema(
                                             table=tbl_details,
                                             new_cols=added_cols_dlist,
                                             del_cols=del_cols_dlist,
                                         )
+                                        if not status:
+                                            print(
+                                                f"==> Exception occurred while updating table schema for {table_name}."
+                                            )
+                                            print(
+                                                f"Exception details: {error['Code']} - {error['Message']}"
+                                            )
+                                            errored_tables.append(table_name)
+                                        else:
+                                            success_tables.append(table_name)
                                     else:
                                         print(
                                             "=> Table will be updated with the identified changes."
@@ -294,8 +336,15 @@ def alterator(**kwargs):
                         fname,
                     )
             print(f"###### Process finished for {fname} ######")
-        # TODO: make these usable somehow for next step instead of just printing ?? can be integrated with SNS if needed
+        # can be integrated with SNS if needed
         print("skipped tables: ", skipped_tables)
         print("new tables:", new_tables)  # can be used for creating new tables directly
+        alterator_response = {
+            "skipped_tables": skipped_tables,
+            "new_tables": new_tables,
+            "success_tables": success_tables,
+            "errored_tables": errored_tables,
+        }
+        return alterator_response
     except Exception as ex:
         raise ex
