@@ -82,6 +82,12 @@ if __name__ == "__main__":
         choices=[0, 1],
         help="Specifies if partition check is required during table syncing. Used with --sync. default is 1",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        required=False,
+        help="Force update the schema. IGNORES data type validation. Used with --sync",
+    )
 
     # print(sys.argv)
     args = parser.parse_args()
@@ -98,10 +104,14 @@ if __name__ == "__main__":
     part_check = args.partition_check
     if part_check is None:
         part_check = 1
+    force = args.force
 
     if sync:
         try:
-            sync_tables(src, tgt, part_check=part_check, validate=validate)
+            sync_tables(src, tgt,
+                        part_check=part_check,
+                        validate=validate,
+                        force=force)
             print("Sync completed successfully.")
             # exit and send success
             sys.exit(0)

@@ -9,7 +9,7 @@ from utils import s3_utils as s3utils
 
 
 def sync_tables(src, tgt, **kwargs):
-    """Main SYNC functionality method for syncing the 
+    """Main SYNC functionality method for syncing the
     target table schema with source table schema.
     Args:
         src (str): Source table name with database
@@ -17,12 +17,16 @@ def sync_tables(src, tgt, **kwargs):
         **kwargs : optional Arguments:
             validate (bool): Flag to validate the sync process.
             part_check (int): Flag to check partition columns.
+            force (bool): Flag to IGNORE data type validation.
     Raises:
         Exception: Generic exception in case of failures
-    """           
+    """
     print("##### SYNC TABLE PROCESS #####")
     validate = kwargs.get("validate", False)
     part_check = kwargs.get("part_check", 1)
+    force_upd = kwargs.get("force", False)
+    if force_upd:
+        print("WARN: FORCE update is enabled. Data type validation will be IGNORED.")
     src_db, src_tbl = src.split(".")
     tgt_db, tgt_tbl = tgt.split(".")
     print(f"=> src details >> \n database: {src_db} \n table: {src_tbl}")
@@ -67,7 +71,7 @@ def sync_tables(src, tgt, **kwargs):
         # Get columns that needs to be added or removed in tgt table as per src table to sync schema
         new_cols, removed_cols, combined_df = hfunc.compare_schema(src_cols, tgt_cols)
         print(combined_df)
-        if not combined_df.empty:
+        if not combined_df.empty and not force_upd:
             print(f"****Validating data type compatibility for {tgt}****")
             response = rbook.check_dtype_compatibility(combined_df)
             if not response:
@@ -114,10 +118,10 @@ def alterator(**kwargs):
         Exception: Generic exception in case of failures
 
     Returns:
-        dict: Dictionary with table segregation 
-              into success, errored, skipped and new with keys: 
+        dict: Dictionary with table segregation
+              into success, errored, skipped and new with keys:
               success_tables, errored_tables, skipped_tables and new_tables.
-    """         
+    """
     paths = kwargs.get("paths")
     ddl_config_path = kwargs.get("ddl_config_path")
     path_key = kwargs.get("path_key")
