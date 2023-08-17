@@ -16,7 +16,10 @@ def external_table_check(table_obj):
     elif isinstance(table_obj, str):
         ext_regex = r"CREATE\s*(EXTERNAL)\s*table"
         match = re.search(ext_regex, table_obj, flags=re.IGNORECASE)
-        return True if match.group(1).lower() == "external" else False
+        if match:
+            return True if match.group(1).lower() == "external" else False
+        else:
+            return False
     else:
         raise Exception("Passed object for validation is neither string nor dict.")
 
@@ -193,5 +196,6 @@ QUERY_ENG_DTYPE_COMPATIBILITY = {
         "SMALLINT": ["INT", "BIGINT"],
         "INT": ["BIGINT"],
         "FLOAT": ["DOUBLE"],
+        "DECIMAL": ["DECIMAL"]
     }
 }

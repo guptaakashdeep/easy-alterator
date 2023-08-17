@@ -130,7 +130,7 @@ def alterator(**kwargs):
     validate = kwargs.get("validate")
 
     hql_paths = []
-    config = None
+    config = {}
     # check if the paths provided are valid:
     if paths:
         futils.check_paths(paths)
@@ -208,7 +208,8 @@ def alterator(**kwargs):
                         print(
                             f"==> HQL provided for {table_name} is not a create statement."
                         )
-                        skipped_tables.append(table_name)
+                        # TODO: IncorrectSQLFormat
+                        skipped_tables.append({"table_name": table_name, "reason":"IncorrectSQLFormat"})
                         skip = True
                     else:
                         # run initial checks on HQL
@@ -222,7 +223,8 @@ def alterator(**kwargs):
                             print(
                                 f"==> Initial validation failed for provided HQL {table_name}."
                             )
-                            skipped_tables.append(table_name)
+                            # TODO: ValidationError
+                            skipped_tables.append({"table_name": table_name, "reason":"ValidationError"})
                             skip = True
                     if not skip:
                         # get table details from glue catalog
@@ -245,7 +247,8 @@ def alterator(**kwargs):
                                 if catalog_validation:
                                     print("=> Initial validation for catalog passed.")
                                 else:
-                                    skipped_tables.append(table_name)
+                                    #TODO: ValidationError
+                                    skipped_tables.append({"table_name": table_name, "reason":"ValidationError"})
                                     skip = True
                                     print("==> Initial validation for catalog failed.")
                                 # run partition column check
@@ -257,7 +260,8 @@ def alterator(**kwargs):
                                         f"=> Partition Validation passed for {table_name}."
                                     )
                                 else:
-                                    skipped_tables.append(table_name)
+                                    # TODO: PartitionValidationError
+                                    skipped_tables.append({"table_name": table_name, "reason":"PartitionValidationError"})
                                     skip = True
                                     print(
                                         f"==> Partition Validation failed for {table_name}."
@@ -285,7 +289,8 @@ def alterator(**kwargs):
                                     print(
                                         f"==> Skipping schema update for {table_name}"
                                     )
-                                    skipped_tables.append(table_name)
+                                    #TODO: IncompatibleDataTypeError
+                                    skipped_tables.append({"table_name": table_name, "reason":"IncompatibleDataTypeError"})
                                     skip = True
                             # Create ALTER statements => TEST it via EMR first.
                             if not skip:

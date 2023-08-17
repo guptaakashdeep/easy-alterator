@@ -3,6 +3,8 @@
 import boto3
 from botocore.exceptions import ClientError
 
+REGION = "eu-west-1"
+
 
 def _get_bucket_key(s3_path):
     """
@@ -26,7 +28,7 @@ def validate_s3_object(s3_path):
     :return: bool
     """
     s3_bucket, s3_key = _get_bucket_key(s3_path)
-    s3 = boto3.client("s3")
+    s3 = boto3.client("s3", region_name=REGION)
     try:
         # using list_object_v2 to validate instead of head_object because s3_key can be just path to folder like structure
         response = s3.list_objects_v2(
@@ -46,7 +48,7 @@ def list_s3_objects(s3_path):
     :return: list
     """
     s3_bucket, s3_key = _get_bucket_key(s3_path)
-    s3 = boto3.client("s3")
+    s3 = boto3.client("s3", region_name=REGION)
     keylist = []
     kwargs = {"Bucket": s3_bucket}
     if isinstance(s3_key, str):
@@ -81,7 +83,7 @@ def read_s3_file(s3_path):
     :return: str
     """
     s3_bucket, s3_key = _get_bucket_key(s3_path)
-    s3 = boto3.client("s3")
+    s3 = boto3.client("s3", region_name=REGION)
     try:
         response = s3.get_object(Bucket=s3_bucket, Key=s3_key)
     except ClientError:

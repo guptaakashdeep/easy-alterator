@@ -127,7 +127,7 @@ if __name__ == "__main__":
             path_key=path_key,
             ddl_file_prefix=ddl_file_prefix,
             ddl_file_suffix=ddl_file_suffix,
-            validate=validate,
+            validate=validate
         )
         print(response)
     except Exception as ex:

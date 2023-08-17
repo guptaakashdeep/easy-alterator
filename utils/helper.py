@@ -5,7 +5,6 @@ import pandas as pd
 from rules import rule_book as rbook
 
 
-
 def intial_checks(table_info):
     """
     Runs the initial validation rules
