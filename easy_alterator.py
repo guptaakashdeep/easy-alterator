@@ -2,6 +2,7 @@
 import argparse
 import sys
 from bin.process import sync_tables, alterator
+from utils.helper import get_aws_region
 
 
 if __name__ == "__main__":
@@ -127,7 +128,7 @@ if __name__ == "__main__":
             path_key=path_key,
             ddl_file_prefix=ddl_file_prefix,
             ddl_file_suffix=ddl_file_suffix,
-            validate=validate,
+            validate=validate
         )
         print(response)
     except Exception as ex:

@@ -3,6 +3,9 @@
 from copy import deepcopy
 import boto3
 from botocore.exceptions import ClientError
+from utils.helper import get_aws_region
+
+REGION = get_aws_region() 
 
 
 def get_table_details(database, table):
@@ -14,7 +17,7 @@ def get_table_details(database, table):
     :return: dict
     """
     try:
-        client = boto3.client("glue")
+        client = boto3.client("glue", region_name=REGION)
         response = client.get_table(DatabaseName=database, Name=table)
         return response
     except ClientError as error:
@@ -37,7 +40,7 @@ def update_table_schema(table, new_cols, del_cols):
     :param del_cols: list of dict
     :return: tuple: (Bool, string, dict)
     """
-    glue_client = boto3.client("glue")
+    glue_client = boto3.client("glue", region_name=REGION)
     updated_table = deepcopy(table)
     db_name = table["Table"]["DatabaseName"]
     table_name = table["Table"]["Name"]
