@@ -1,6 +1,7 @@
 """Module for helper functions."""
 
-from os import popen
+import os
+import boto3
 import pandas as pd
 from rules import rule_book as rbook
 
@@ -84,9 +85,34 @@ def compare_schema(new_col_list, old_col_list):
 
 def get_account_id():
     return str(
-        popen(
+        os.popen(
             "curl -s http://169.254.169.254/latest/dynamic/instance-identity/document | jq -r .accountId"
         )
+        .read()
+        .strip()
+    )
+
+
+def get_aws_region():
+    check_external = False
+    region_checks = [
+        # check if set through ENV vars
+        os.environ.get('AWS_REGION'),
+        os.environ.get('AWS_DEFAULT_REGION'),
+        # else check if set in config or in boto already
+        boto3.DEFAULT_SESSION.region_name if boto3.DEFAULT_SESSION else None,
+        boto3.Session().region_name,
+    ]
+
+    for region in region_checks:
+        if region:
+            return region
+        else:
+            check_external = True
+    
+    if check_external:
+        str(
+            os.popen("curl -s http://169.254.169.254/latest/dynamic/instance-identity/document | jq -r .accountId")
         .read()
         .strip()
     )

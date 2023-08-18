@@ -173,7 +173,7 @@ def alterator(**kwargs):
     success_tables = []
     errored_tables = []
 
-    # Fetching AWS ID from EMR
+    # Fetching AWS account id
     aws_account_id = hfunc.get_account_id()
     try:
         # loop over DDL files:

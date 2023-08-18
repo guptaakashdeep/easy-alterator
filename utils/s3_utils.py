@@ -2,8 +2,9 @@
 
 import boto3
 from botocore.exceptions import ClientError
+from utils.helper import get_aws_region
 
-REGION = "eu-west-1"
+REGION = get_aws_region()
 
 
 def _get_bucket_key(s3_path):

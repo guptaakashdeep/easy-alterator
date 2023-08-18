@@ -3,9 +3,10 @@
 from copy import deepcopy
 import boto3
 from botocore.exceptions import ClientError
+from utils.helper import get_aws_region
 
+REGION = get_aws_region() 
 
-REGION = "eu-west-1"
 
 def get_table_details(database, table):
     """

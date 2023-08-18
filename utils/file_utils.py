@@ -1,7 +1,7 @@
 """Module to handle file and filepath related operations."""
 
 import os
-from .s3_utils import validate_s3_object, list_s3_objects, read_s3_file
+from utils.s3_utils import validate_s3_object, list_s3_objects, read_s3_file
 import yaml
 
 
