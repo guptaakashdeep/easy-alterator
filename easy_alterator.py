@@ -87,7 +87,7 @@ if __name__ == "__main__":
         "--force",
         action="store_true",
         required=False,
-        help="Force update the schema. IGNORES data type validation. Used with --sync",
+        help="Force update the schema. IGNORES data type validation.",
     )
 
     # print(sys.argv)
@@ -128,7 +128,8 @@ if __name__ == "__main__":
             path_key=path_key,
             ddl_file_prefix=ddl_file_prefix,
             ddl_file_suffix=ddl_file_suffix,
-            validate=validate
+            validate=validate,
+            force=force
         )
         print(response)
     except Exception as ex:

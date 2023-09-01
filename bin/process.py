@@ -48,8 +48,8 @@ def sync_tables(src, tgt, **kwargs):
             )
             raise Exception(tgt_tbl_details["Error"])
     # running initial validations
-    src_validation = hfunc.intial_checks(src_tbl_details)
-    tgt_validation = hfunc.intial_checks(tgt_tbl_details)
+    _, src_validation = hfunc.intial_checks(src_tbl_details)
+    _, tgt_validation = hfunc.intial_checks(tgt_tbl_details)
     if src_validation and tgt_validation:
         print("=> Initial Validation Passed")
         # compare partition columns
@@ -114,6 +114,7 @@ def alterator(**kwargs):
             ddl_file_suffix (str): Suffix for DDL files.
             validate (bool): Flag to validate the sync process.
             part_check (int): Flag to check partition columns.
+            force (bool): Flag to IGNORE data type validation.
     Raises:
         Exception: Generic exception in case of failures
 
@@ -128,6 +129,7 @@ def alterator(**kwargs):
     ddl_file_prefix = kwargs.get("ddl_file_prefix")
     ddl_file_suffix = kwargs.get("ddl_file_suffix")
     validate = kwargs.get("validate")
+    force = kwargs.get("force")
 
     hql_paths = []
     config = {}
@@ -214,17 +216,17 @@ def alterator(**kwargs):
                     else:
                         # run initial checks on HQL
                         print("*** Running initial validation.***")
-                        validation_results = hfunc.intial_checks(data)
+                        validation_type, validation_results = hfunc.intial_checks(data)
                         if validation_results:
                             print(
                                 f"=> Initial validations are successful for {table_name}."
                             )
                         else:
                             print(
-                                f"==> Initial validation failed for provided HQL {table_name}."
+                                f"==> Initial validation: {validation_type} failed for provided HQL {table_name}."
                             )
                             # TODO: ValidationError
-                            skipped_tables.append({"table_name": table_name, "reason":"ValidationError"})
+                            skipped_tables.append({"table_name": table_name, "reason":"ValidationError", "type": validation_type, "from":"HQL"})
                             skip = True
                     if not skip:
                         # get table details from glue catalog
@@ -243,12 +245,12 @@ def alterator(**kwargs):
                                     "Columns"
                                 ]
                                 # run initial checks
-                                catalog_validation = hfunc.intial_checks(tbl_details)
+                                catalog_validation_type, catalog_validation = hfunc.intial_checks(tbl_details)
                                 if catalog_validation:
                                     print("=> Initial validation for catalog passed.")
                                 else:
                                     #TODO: ValidationError
-                                    skipped_tables.append({"table_name": table_name, "reason":"ValidationError"})
+                                    skipped_tables.append({"table_name": table_name, "reason":"ValidationError", "type": catalog_validation_type, "from": "CATALOG"})
                                     skip = True
                                     print("==> Initial validation for catalog failed.")
                                 # run partition column check
@@ -280,7 +282,7 @@ def alterator(**kwargs):
                                 del_cols_dlist,
                                 merged_df,
                             ) = hfunc.compare_schema(hql_col_dlist, catalog_col_list)
-                            if not merged_df.empty:
+                            if not merged_df.empty and not force:
                                 print(
                                     f"****Validating data type compatibility for {table_name}****"
                                 )
@@ -315,6 +317,7 @@ def alterator(**kwargs):
                                         print(
                                             "=> Table will be updated with the identified changes."
                                         )
+                                        success_tables.append(table_name)
                                 else:
                                     print(
                                         f"=> Update is not required for `{table_name}`"
@@ -349,6 +352,7 @@ def alterator(**kwargs):
         print("skipped tables: ", skipped_tables)
         print("new tables:", new_tables)  # can be used for creating new tables directly
         alterator_response = {
+            "validation_response" : str(validate),
             "skipped_tables": skipped_tables,
             "new_tables": new_tables,
             "success_tables": success_tables,

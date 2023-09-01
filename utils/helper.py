@@ -20,8 +20,8 @@ def intial_checks(table_info):
         if not vresult:
             print(f"{key} validation failed.")
             # TODO: MAYBE update this later to something more meaningful ? A failure event ?
-            return False
-    return True
+            return key, False
+    return "all", True
 
 
 def compare_schema(new_col_list, old_col_list):
@@ -111,8 +111,8 @@ def get_aws_region():
             check_external = True
     
     if check_external:
-        str(
-            os.popen("curl -s http://169.254.169.254/latest/dynamic/instance-identity/document | jq -r .accountId")
+        return str(
+            os.popen("curl -s http://169.254.169.254/latest/dynamic/instance-identity/document | jq -r .region")
         .read()
         .strip()
     )
