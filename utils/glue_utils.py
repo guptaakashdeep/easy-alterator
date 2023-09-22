@@ -3,9 +3,11 @@
 from copy import deepcopy
 import boto3
 from botocore.exceptions import ClientError
+import logging
 from utils.helper import get_aws_region
 
-REGION = get_aws_region() 
+REGION = get_aws_region()
+logger = logging.getLogger('EA.utils.glue_utils')
 
 
 def get_table_details(database, table):
@@ -23,10 +25,10 @@ def get_table_details(database, table):
     except ClientError as error:
         err_response = error.response
         if err_response["Error"]["Code"] == "EntityNotFoundException":
-            print(err_response["Message"])
+            logger.error(err_response["Message"])
         return err_response
     except Exception as ex:
-        print("Error occured while getting table from catalog.")
+        logger.critical("Error occured while getting table from catalog.")
         raise ex
 
 
@@ -69,7 +71,7 @@ def update_table_schema(table, new_cols, del_cols):
     else:
         updated_columns = new_cols_list
 
-    print("Final cols list ==>", updated_columns)
+    logger.debug(f"Final cols list ==> {updated_columns}")
     updated_table["Table"]["StorageDescriptor"]["Columns"] = updated_columns
 
     up_response = glue_client.update_table(
@@ -78,8 +80,29 @@ def update_table_schema(table, new_cols, del_cols):
 
     # Check if the update is successful or not.
     if up_response["ResponseMetadata"]["HTTPStatusCode"] == 200:
-        print(f"Update successful for {db_name}.{table_name}")
+        logger.info(f"Update successful for {db_name}.{table_name}")
         return True, f"{db_name}.{table_name}", None
     else:
-        print(f"Update failure for {db_name}.{table_name}")
+        logger.error(f"Update failure for {db_name}.{table_name}")
         return False, f"{db_name}.{table_name}", up_response["Error"]
+
+
+def get_latest_table_version(database, table):
+    client = boto3.client("glue", region_name=REGION)
+    try:
+        response = client.get_table_versions(DatabaseName=database, TableName=table)
+        if response['TableVersions']:
+            version_id = response['TableVersions'][0]['VersionId']
+            return version_id
+        else:
+            logger.critical(f"No version available for the {database}.{table}")
+            raise Exception(f"No version available for the {database}.{table}")
+    except ClientError as error:
+        err_response = error.response
+        if err_response["Error"]["Code"] == "EntityNotFoundException":
+            logger.error(err_response["Message"])
+            raise error
+    except Exception as ex:
+        logger.critical("Error occured while getting table from catalog.")
+        raise ex
+

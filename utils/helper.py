@@ -2,8 +2,11 @@
 
 import os
 import boto3
+import logging
 import pandas as pd
 from rules import rule_book as rbook
+
+logger = logging.getLogger('EA.utils.helper')
 
 
 def intial_checks(table_info):
@@ -18,7 +21,7 @@ def intial_checks(table_info):
     for key, value in rbook.INITIAL_RULE_DICT.items():
         vresult = value(table_info)
         if not vresult:
-            print(f"{key} validation failed.")
+            logger.error(f"{key} validation failed.")
             # TODO: MAYBE update this later to something more meaningful ? A failure event ?
             return key, False
     return "all", True
@@ -71,14 +74,14 @@ def compare_schema(new_col_list, old_col_list):
         ["Name", "Type"]
     ].to_dict("records")
 
-    print("++++ Newly Added columns ==>", added_cols)
-    print("---- Deleted columns ===>", deleted_cols)
-    print("++++ New columns count ==>", len(added_cols))
-    print("---- Deleted columns count ===>", len(deleted_cols))
+    logger.info(f"++++ Newly Added columns ==> {added_cols}")
+    logger.info(f"---- Deleted columns ===> {deleted_cols}")
+    logger.info(f"++++ New columns count ==> {len(added_cols)}")
+    logger.info(f"---- Deleted columns count ===> {len(deleted_cols)}")
 
     if not datatype_changes.empty:
-        print(
-            "+-+- data type changes records for: ", datatype_changes["Name"].to_list()
+        logger.warn(
+            f'+-+- data type changes records for: {datatype_changes["Name"].to_list()}'
         )
     return added_cols, deleted_cols, datatype_changes
 
