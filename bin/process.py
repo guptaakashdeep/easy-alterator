@@ -9,8 +9,8 @@ from utils import s3_utils as s3utils
 import logging
 
 
-logger_sync = logging.getLogger('EA.process.sync')
-logger_alt = logging.getLogger('EA.process.alterator')
+logger_sync = logging.getLogger("EA.process.sync")
+logger_alt = logging.getLogger("EA.process.alterator")
 
 
 def sync_tables(src, tgt, **kwargs):
@@ -31,7 +31,9 @@ def sync_tables(src, tgt, **kwargs):
     part_check = kwargs.get("part_check", 1)
     force_upd = kwargs.get("force", False)
     if force_upd:
-        logger_sync.warn("WARN: FORCE update is enabled. Data type validation will be IGNORED.")
+        logger_sync.warning(
+            "WARN: FORCE update is enabled. Data type validation will be IGNORED."
+        )
     src_db, src_tbl = src.split(".")
     tgt_db, tgt_tbl = tgt.split(".")
     logger_sync.info(f"=> src details >> \n database: {src_db} \n table: {src_tbl}")
@@ -107,25 +109,35 @@ def sync_tables(src, tgt, **kwargs):
     logger_sync.info("##### SYNC TABLE PROCESS COMPLETED #####")
 
 
-def alterator(**kwargs):
-    """Main ALTERATOR functionality method for altering the table schema.
-    Args:
-        **kwargs : optional Arguments:
-            paths (list): List of paths to read the DDL files.
-            ddl_config_path (str): Path to read the DDL configuration file.
-            path_key (str): Key for path in DDL configuration file.
-            ddl_file_prefix (str): Prefix for DDL files.
-            ddl_file_suffix (str): Suffix for DDL files.
-            validate (bool): Flag to validate the sync process.
-            part_check (int): Flag to check partition columns.
-            force (bool): Flag to IGNORE data type validation.
-    Raises:
-        Exception: Generic exception in case of failures
+def alterator(**kwargs) -> dict:
+    """
+    Main ALTERATOR functionality method for altering the table schema.
+    This function is used to alter the table schema.
+    It will extract the DDL files from the provided paths,
+    compares the schema with already existing table and
+    alter the table schema as per the DDL files.
 
-    Returns:
-        dict: Dictionary with table segregation
-              into success, errored, skipped and new with keys:
-              success_tables, errored_tables, skipped_tables and new_tables.
+    Parameters
+    ----------
+    paths : list
+        List of paths where DDL files are present.
+    ddl_config_path : str
+        Path to the configuration file.
+    path_key : str
+        Key for the path in the configuration file.
+    ddl_file_prefix : str
+        Prefix for the DDL files.
+    ddl_file_suffix : str
+        Suffix for the DDL files.
+    validate : bool
+        dry runs the process and returns the result that will be made when the process is run.
+    force : bool
+        Flag to force the update of the table schema. IGNORES the data type compatibility validation.
+
+    Returns
+    -------
+    response : dict
+        Response from the Alterator process.
     """
     paths = kwargs.get("paths")
     ddl_config_path = kwargs.get("ddl_config_path")
@@ -208,7 +220,13 @@ def alterator(**kwargs):
                     table_name = f"{db}.{table}"
                 else:
                     logger_alt.error(f"==> Please validate the DDL format for {fname}")
-                    skipped_tables.append({"table_name": "","filename": fname, "reason":"IncorrectSQLFormat"})
+                    skipped_tables.append(
+                        {
+                            "table_name": "",
+                            "filename": fname,
+                            "reason": "IncorrectSQLFormat",
+                        }
+                    )
                     skip = True
                 if not skip:
                     # Check if hql is create statement.
@@ -217,7 +235,13 @@ def alterator(**kwargs):
                             f"==> HQL provided for {table_name} is not a create statement."
                         )
                         # TODO: IncorrectSQLFormat
-                        skipped_tables.append({"table_name": table_name, "filename": fname, "reason":"NonCreateSQL"})
+                        skipped_tables.append(
+                            {
+                                "table_name": table_name,
+                                "filename": fname,
+                                "reason": "NonCreateSQL",
+                            }
+                        )
                         skip = True
                     else:
                         # run initial checks on HQL
@@ -232,7 +256,14 @@ def alterator(**kwargs):
                                 f"==> Initial validation: {validation_type} failed for provided HQL {table_name}."
                             )
                             # TODO: ValidationError
-                            skipped_tables.append({"table_name": table_name, "reason":"ValidationError", "type": validation_type, "from":"HQL"})
+                            skipped_tables.append(
+                                {
+                                    "table_name": table_name,
+                                    "reason": "ValidationError",
+                                    "type": validation_type,
+                                    "from": "HQL",
+                                }
+                            )
                             skip = True
                     if not skip:
                         # get table details from glue catalog
@@ -251,14 +282,28 @@ def alterator(**kwargs):
                                     "Columns"
                                 ]
                                 # run initial checks
-                                catalog_validation_type, catalog_validation = hfunc.intial_checks(tbl_details)
+                                (
+                                    catalog_validation_type,
+                                    catalog_validation,
+                                ) = hfunc.intial_checks(tbl_details)
                                 if catalog_validation:
-                                    logger_alt.info("=> Initial validation for catalog passed.")
+                                    logger_alt.info(
+                                        "=> Initial validation for catalog passed."
+                                    )
                                 else:
-                                    #TODO: ValidationError
-                                    skipped_tables.append({"table_name": table_name, "reason":"ValidationError", "type": catalog_validation_type, "from": "CATALOG"})
+                                    # TODO: ValidationError
+                                    skipped_tables.append(
+                                        {
+                                            "table_name": table_name,
+                                            "reason": "ValidationError",
+                                            "type": catalog_validation_type,
+                                            "from": "CATALOG",
+                                        }
+                                    )
                                     skip = True
-                                    logger_alt.error("==> Initial validation for catalog failed.")
+                                    logger_alt.error(
+                                        "==> Initial validation for catalog failed."
+                                    )
                                 # run partition column check
                                 partition_validation = rbook.partition_col_check(
                                     data, partition_keys
@@ -269,7 +314,12 @@ def alterator(**kwargs):
                                     )
                                 else:
                                     # TODO: PartitionValidationError
-                                    skipped_tables.append({"table_name": table_name, "reason":"PartitionValidationError"})
+                                    skipped_tables.append(
+                                        {
+                                            "table_name": table_name,
+                                            "reason": "PartitionValidationError",
+                                        }
+                                    )
                                     skip = True
                                     logger_alt.error(
                                         f"==> Partition Validation failed for {table_name}."
@@ -292,56 +342,112 @@ def alterator(**kwargs):
                                 logger_alt.info(
                                     f"****Validating data type compatibility for {table_name}****"
                                 )
-                                response, compatible, incompatible = rbook.check_dtype_compatibility(merged_df)
+                                (
+                                    response,
+                                    compatible,
+                                    incompatible,
+                                ) = rbook.check_dtype_compatibility(merged_df)
                                 if not response:
                                     if force:
-                                        logger_alt.warn("FORCE flag is enabled. Table will be updated with incompatible data type changes.")
-                                        new_dtype_cols = merged_df[["Name", "Type_new"]].rename(columns={"Type_new":"Type"}).to_dict("records")
-                                        old_dtype_cols = merged_df[["Name", "Type_old"]].rename(columns={"Type_old":"Type"}).to_dict("records")
-                                        added_cols_dlist = added_cols_dlist + new_dtype_cols
+                                        logger_alt.warning(
+                                            "FORCE flag is enabled. Table will be updated with incompatible data type changes."
+                                        )
+                                        new_dtype_cols = (
+                                            merged_df[["Name", "Type_new"]]
+                                            .rename(columns={"Type_new": "Type"})
+                                            .to_dict("records")
+                                        )
+                                        old_dtype_cols = (
+                                            merged_df[["Name", "Type_old"]]
+                                            .rename(columns={"Type_old": "Type"})
+                                            .to_dict("records")
+                                        )
+                                        added_cols_dlist = (
+                                            added_cols_dlist + new_dtype_cols
+                                        )
                                         del_cols_dlist = del_cols_dlist + old_dtype_cols
                                     else:
                                         logger_alt.info(
                                             f"==> Skipping schema update for {table_name}"
                                         )
-                                        #TODO: Add details dict.
-                                        compatible_cols = compatible[["Name" ,"Type_old", "Type_new"]].rename(columns={"Type_old":"Type", "Type_new":"updated_type"}).to_dict("records")
-                                        incompatible_cols = incompatible[["Name" ,"Type_old", "Type_new"]].rename(columns={"Type_old":"Type", "Type_new":"updated_type"}).to_dict("records")
-                                        skipped_tables.append({"table_name": table_name, 
-                                                                "reason":"IncompatibleDataTypeError", 
-                                                                "details": {
-                                                                    "compatible": compatible_cols,
-                                                                    "incompatible": incompatible_cols,
-                                                                    "add": added_cols_dlist,
-                                                                    "delete": del_cols_dlist
-                                                                }})
+                                        # TODO: Add details dict.
+                                        compatible_cols = (
+                                            compatible[["Name", "Type_old", "Type_new"]]
+                                            .rename(
+                                                columns={
+                                                    "Type_old": "Type",
+                                                    "Type_new": "updated_type",
+                                                }
+                                            )
+                                            .to_dict("records")
+                                        )
+                                        incompatible_cols = (
+                                            incompatible[
+                                                ["Name", "Type_old", "Type_new"]
+                                            ]
+                                            .rename(
+                                                columns={
+                                                    "Type_old": "Type",
+                                                    "Type_new": "updated_type",
+                                                }
+                                            )
+                                            .to_dict("records")
+                                        )
+                                        skipped_tables.append(
+                                            {
+                                                "table_name": table_name,
+                                                "reason": "IncompatibleDataTypeError",
+                                                "details": {
+                                                    "compatible": compatible_cols,
+                                                    "incompatible": incompatible_cols,
+                                                    "add": added_cols_dlist,
+                                                    "delete": del_cols_dlist,
+                                                },
+                                            }
+                                        )
                                         skip = True
-                                else: # get the compatible data type changes if any
+                                else:  # get the compatible data type changes if any
                                     if not compatible.empty:
-                                        logger_alt.info("Getting compatible datatype columns.")
-                                        new_dtype_cols = compatible[["Name", "Type_new"]].rename(columns={"Type_new":"Type"}).to_dict("records")
-                                        old_dtype_cols = compatible[["Name", "Type_old"]].rename(columns={"Type_old":"Type"}).to_dict("records")
-                                        added_cols_dlist = added_cols_dlist + new_dtype_cols
+                                        logger_alt.info(
+                                            "Getting compatible datatype columns."
+                                        )
+                                        new_dtype_cols = (
+                                            compatible[["Name", "Type_new"]]
+                                            .rename(columns={"Type_new": "Type"})
+                                            .to_dict("records")
+                                        )
+                                        old_dtype_cols = (
+                                            compatible[["Name", "Type_old"]]
+                                            .rename(columns={"Type_old": "Type"})
+                                            .to_dict("records")
+                                        )
+                                        added_cols_dlist = (
+                                            added_cols_dlist + new_dtype_cols
+                                        )
                                         del_cols_dlist = del_cols_dlist + old_dtype_cols
                             # TODO: incase of force update implement added_cols_list.append(new cols) and del_cols_dlist.append(old cols).
                             if not skip:
                                 if added_cols_dlist or del_cols_dlist:
                                     if not validate:
-                                        previous_ver = glue.get_latest_table_version(db, table)
+                                        previous_ver = glue.get_latest_table_version(
+                                            db, table
+                                        )
                                         status, _, error = glue.update_table_schema(
                                             table=tbl_details,
                                             new_cols=added_cols_dlist,
                                             del_cols=del_cols_dlist,
                                         )
-                                        updated_ver = glue.get_latest_table_version(db,table)
+                                        updated_ver = glue.get_latest_table_version(
+                                            db, table
+                                        )
                                         success_response = {
                                             "table_name": table_name,
                                             "previous_version": previous_ver,
                                             "current_version": updated_ver,
                                             "details": {
                                                 "add": added_cols_dlist,
-                                                "delete": del_cols_dlist
-                                            }
+                                                "delete": del_cols_dlist,
+                                            },
                                         }
                                         if not status:
                                             logger_alt.error(
@@ -357,15 +463,17 @@ def alterator(**kwargs):
                                         logger_alt.info(
                                             "=> Table will be updated with the identified changes."
                                         )
-                                        current_ver = glue.get_latest_table_version(db,table)
+                                        current_ver = glue.get_latest_table_version(
+                                            db, table
+                                        )
                                         success_response = {
                                             "table_name": table_name,
                                             "previous_version": current_ver,
                                             "current_version": current_ver,
                                             "details": {
                                                 "add": added_cols_dlist,
-                                                "delete": del_cols_dlist
-                                            }
+                                                "delete": del_cols_dlist,
+                                            },
                                         }
                                         success_tables.append(success_response)
                                 else:
@@ -379,46 +487,54 @@ def alterator(**kwargs):
                                         f"==> skipping schema update for table: {table_name}"
                                     )
                                 else:
-                                    logger_alt.warn(
+                                    logger_alt.warning(
                                         f"==> schema update for table: {table_name} will be skipped."
                                     )
                         else:
                             if move_to_next:
-                                logger_alt.error(f"==> {table_name} doesn't exist in the system.")
+                                logger_alt.error(
+                                    f"==> {table_name} doesn't exist in the system."
+                                )
                             if skip:
                                 logger_alt.error(
                                     f"==> Initial Validation failed or Change in partition column detected for {table_name}"
                                 )
                     else:
-                        logger_alt.warn(
+                        logger_alt.warning(
                             f"==> skipping schema update for table: {table_name} due to initial validation failure"
                         )
                 else:
-                    logger_alt.warn(
+                    logger_alt.warning(
                         f"==> Skipping schema update for table due to incorrect DDL Format in: {fname}",
                     )
             logger_alt.info(f"###### Process finished for {fname} ######")
         # can be integrated with SNS if needed
         logger_alt.debug(f"skipped tables: {skipped_tables}")
-        logger_alt.debug(f"new tables: {new_tables}")  # can be used for creating new tables directly
+        logger_alt.debug(
+            f"new tables: {new_tables}"
+        )  # can be used for creating new tables directly
         alterator_response = {
             "ResponseMetadata": {
-                "validation" : str(validate),
+                "validation": str(validate),
                 "force": str(force),
                 "stats": {
-                    "num_tables_analyzed": len(skipped_tables) + len(new_tables) + len(errored_tables) + len(success_tables) + len(identical_tables),
+                    "num_tables_analyzed": len(skipped_tables)
+                    + len(new_tables)
+                    + len(errored_tables)
+                    + len(success_tables)
+                    + len(identical_tables),
                     "num_updates": len(success_tables),
                     "num_skipped": len(skipped_tables),
                     "num_new": len(new_tables),
                     "num_errored": len(errored_tables),
-                    "num_identical": len(identical_tables)
-                }
+                    "num_identical": len(identical_tables),
+                },
             },
             "skipped_tables": skipped_tables,
             "new_tables": new_tables,
             "success_tables": success_tables,
             "errored_tables": errored_tables,
-            "identical_tables": identical_tables
+            "identical_tables": identical_tables,
         }
         return alterator_response
     except Exception as ex:

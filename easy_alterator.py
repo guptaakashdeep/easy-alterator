@@ -2,7 +2,6 @@
 import argparse
 import sys
 from bin.process import sync_tables, alterator
-from utils.helper import get_aws_region
 import logging
 
 

@@ -87,6 +87,10 @@ def compare_schema(new_col_list, old_col_list):
 
 
 def get_account_id():
+    """
+    Gets the AWS account ID
+    :return: str
+    """
     return str(
         os.popen(
             "curl -s http://169.254.169.254/latest/dynamic/instance-identity/document | jq -r .accountId"
@@ -97,6 +101,10 @@ def get_account_id():
 
 
 def get_aws_region():
+    """
+    Gets the AWS region
+    :return: str
+    """
     check_external = False
     region_checks = [
         # check if set through ENV vars
@@ -119,3 +127,18 @@ def get_aws_region():
         .read()
         .strip()
     )
+
+
+def get_account_id_v1():
+    """
+    Gets the AWS account ID
+    :return: str
+    """
+    # check if set through ENV vars
+    if os.environ.get('AWS_ACCOUNT_ID'):
+        return os.environ.get('AWS_ACCOUNT_ID')
+    # else check if set in config or in boto already
+    elif boto3.DEFAULT_SESSION.region_name:
+        return boto3.DEFAULT_SESSION.client('sts').get_caller_identity().get('Account')
+    else:
+        return boto3.Session().client('sts').get_caller_identity().get('Account')

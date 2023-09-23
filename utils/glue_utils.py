@@ -88,6 +88,13 @@ def update_table_schema(table, new_cols, del_cols):
 
 
 def get_latest_table_version(database, table):
+    """
+    Gets the latest version of the table from AWS Glue catalog.
+    :param client: boto3 client
+    :param database: str
+    :param table: str
+    :return: str
+    """
     client = boto3.client("glue", region_name=REGION)
     try:
         response = client.get_table_versions(DatabaseName=database, TableName=table)
@@ -105,4 +112,3 @@ def get_latest_table_version(database, table):
     except Exception as ex:
         logger.critical("Error occured while getting table from catalog.")
         raise ex
-

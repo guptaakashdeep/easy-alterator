@@ -175,10 +175,10 @@ def check_dtype_compatibility(df, query_engine="athena"):
     if not incompatible_cols.empty:
         logger.info("==> Incompatible data type change found in the DDL: ")
         for row in incompatible_cols.to_dict(orient="records"):
-            logger.warn(
+            logger.warning(
                 f'{row["Name"]} data type changed from {row["Type_old"]} to {row["Type_new"]}'
             )
-        logger.warn(
+        logger.warning(
             "==> Please change the data type of the following columns to the compatible data type."
         )
         return False, compatible_cols, incompatible_cols
