@@ -2,6 +2,9 @@
 
 import re
 import pandas as pd
+import logging
+
+logger = logging.getLogger('EA.rule_book')
 
 
 def external_table_check(table_obj):
@@ -55,11 +58,11 @@ def parquet_check(table_obj):
             if stored_as == "parquet":
                 return True
             elif stored_as == "inputformat":
-                print("=> checking for serde's")
+                logger.debug("=> checking for serde's")
                 row_fmt_regex = r"ROW\s+FORMAT\s+SERDE\s+'([\w\.]+)'"
                 row_fmt_match = re.search(row_fmt_regex, table_obj, flags=re.IGNORECASE)
                 if row_fmt_match:
-                    print("=> ROW FORMAT MATCHES..!!")
+                    logger.info("=> ROW FORMAT MATCHES..!!")
                     if row_fmt_match.group(1) == PARQUET_ROW_FORMAT.lower():
                         input_serde_regex = r"INPUTFORMAT\s+'([\w\.]+)'"
                         input_serde_match = re.search(
@@ -77,11 +80,9 @@ def parquet_check(table_obj):
                                 else False
                             )
                         else:
-                            print(
-                                "==> INPUT/OUTPUT SERDE isn't Parquet SERDE: ",
-                                input_serde_match.group(1),
-                                "\n",
-                                output_serde_match.group(1),
+                            logger.error(
+                                f"""==> INPUT/OUTPUT SERDE isn't Parquet SERDE: ,
+                                {input_serde_match.group(1)} \n {output_serde_match.group(1)}"""
                             )
                             return False
                     else:
@@ -123,7 +124,7 @@ def partition_col_check(hql_str_dict, catalog_partn_cols):
             hql_df = pd.DataFrame(columns=["Name", "Type"])
     catalog_df = pd.DataFrame(catalog_partn_cols)
     if catalog_df.shape[0] == hql_df.shape[0]:
-        print("=> Column count matches")
+        logger.debug("=> Column count matches")
         # check for emptiness
         if not hql_df.empty and not catalog_df.empty:
             merged_df = pd.merge(
@@ -133,7 +134,7 @@ def partition_col_check(hql_str_dict, catalog_partn_cols):
                 merged_df[merged_df["Type_new"].isna()].empty
                 and merged_df[merged_df["Type_old"].isna()].empty
             ):
-                print("=> parition column names are same")
+                logger.debug("=> parition column names are same")
                 # Check for types
                 if (
                     merged_df[merged_df["Type_new"] == merged_df["Type_old"]].shape[0]
@@ -141,16 +142,16 @@ def partition_col_check(hql_str_dict, catalog_partn_cols):
                 ):
                     return True
                 else:
-                    print("=> Partition column data type mismatch.")
+                    logger.error("=> Partition column data type mismatch.")
                     return False
             else:
-                print("Partition column mismatch.")
+                logger.error("Partition column mismatch.")
                 return False
         else:
-            print("=> No paritions found.")
+            logger.info("=> No paritions found.")
             return True
     else:
-        print("=> Partitions column mismatch")
+        logger.error("=> Partitions column mismatch")
         return False
 
 
@@ -170,17 +171,18 @@ def check_dtype_compatibility(df, query_engine="athena"):
         axis=1,
     )
     incompatible_cols = df[df["compatible"] == 0]
+    compatible_cols = df[df["compatible"] == 1]
     if not incompatible_cols.empty:
-        print("==> Incompatible data type change found in the DDL: ")
+        logger.info("==> Incompatible data type change found in the DDL: ")
         for row in incompatible_cols.to_dict(orient="records"):
-            print(
+            logger.warning(
                 f'{row["Name"]} data type changed from {row["Type_old"]} to {row["Type_new"]}'
             )
-        print(
+        logger.warning(
             "==> Please change the data type of the following columns to the compatible data type."
         )
-        return False
-    return True
+        return False, compatible_cols, incompatible_cols
+    return True, compatible_cols, incompatible_cols
 
 
 INITIAL_RULE_DICT = {

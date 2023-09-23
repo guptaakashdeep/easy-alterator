@@ -1,8 +1,11 @@
 """Module to handle file and filepath related operations."""
 
+import logging
 import os
 from utils.s3_utils import validate_s3_object, list_s3_objects, read_s3_file
 import yaml
+
+logger = logging.getLogger('EA.utils.file_utils')
 
 
 def check_paths(files):
@@ -19,25 +22,26 @@ def check_paths(files):
                 valid = validate_s3_object(file_path)
                 if not valid:
                     valid = False
-                    print(f"{file_path} is invalid.")
+                    logger.error(f"{file_path} is invalid.")
             else:
                 if not os.path.exists(file_path):
                     valid = False
-                    print(f"{file_path} is invalid.")
+                    logger.error(f"{file_path} is invalid.")
     else:
         if isinstance(files, str):
             if files.startswith("s3://"):
                 valid = validate_s3_object(files)
                 if not valid:
                     valid = False
-                    print(f"{files} is invalid.")
+                    logger.error(f"{files} is invalid.")
             elif not os.path.exists(files):
                 valid = False
-                print(f"{files} is invalid.")
+                logger.error(f"{files} is invalid.")
         else:
             valid = False
-            print("path format is invalid.")
+            logger.error("path format is invalid.")
     if not valid:
+        logger.critical("Provided path is invalid.")
         raise Exception("One or more provided paths are invalid")
 
 
@@ -85,7 +89,7 @@ def filter_files(paths, prefix, suffix, **kwargs):
                     )
                 )
             if table_list:
-                print("inside filter 2", len(table_list))
+                logger.debug(f"inside filter 2 {len(table_list)}")
                 # filtering the file only for the tables mentioned in table list.
                 if is_cloud_path:
                     cloud_filenames = [f.rsplit("/", 1)[1] for f in filtered_files]
@@ -121,9 +125,6 @@ def filter_files(paths, prefix, suffix, **kwargs):
                     final_list,
                 )
             )
-    # print(len(os.listdir(paths[0])))
-    # print(len(filtered_files))
-    # print(len(final_list))
     return file_list
 
 

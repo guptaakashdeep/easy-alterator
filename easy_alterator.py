@@ -2,10 +2,20 @@
 import argparse
 import sys
 from bin.process import sync_tables, alterator
-from utils.helper import get_aws_region
+import logging
+
+
+logger = logging.getLogger('EA')
+logger.setLevel(logging.DEBUG)
+con_hndlr = logging.StreamHandler()
+con_hndlr.setLevel(logging.DEBUG)
+fmtr = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+con_hndlr.setFormatter(fmtr)
+logger.addHandler(con_hndlr)
 
 
 if __name__ == "__main__":
+
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "-p",
@@ -87,11 +97,12 @@ if __name__ == "__main__":
         "--force",
         action="store_true",
         required=False,
-        help="Force update the schema. IGNORES data type validation. Used with --sync",
+        help="Force update the schema. IGNORES data type validation.",
     )
 
     # print(sys.argv)
     args = parser.parse_args()
+    logger.info(f"Arguments passed: {vars(args)}")
     paths = args.path
     ddl_config_path = args.config
     path_key = args.key_for_path
@@ -113,25 +124,28 @@ if __name__ == "__main__":
                         part_check=part_check,
                         validate=validate,
                         force=force)
-            print("Sync completed successfully.")
+            logger.info("Sync completed successfully.")
             # exit and send success
             sys.exit(0)
         except Exception as ex:
-            print("Error occured while running sync.")
-            print(ex)
+            logger.error("Error occured while running sync.")
+            logger.error(ex)
             raise ex
 
     try:
+        logger.info("Alterator process called.")
         response = alterator(
             paths=paths,
             ddl_config_path=ddl_config_path,
             path_key=path_key,
             ddl_file_prefix=ddl_file_prefix,
             ddl_file_suffix=ddl_file_suffix,
-            validate=validate
+            validate=validate,
+            force=force
         )
+        logger.info("Alterator process completed successfully.")
         print(response)
     except Exception as ex:
-        print("Error occured while running alterator.")
-        print(ex)
+        logger.error("Error occured while running alterator.")
+        logger.error(ex)
         raise ex
