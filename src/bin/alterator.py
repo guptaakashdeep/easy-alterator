@@ -1,4 +1,4 @@
-"""Main class for Alterator, Sync and Validator"""
+"""Main class for Alterator"""
 import re
 import os
 from rules import rule_book as rbook
@@ -10,6 +10,44 @@ import logging
 
 
 class Alterator:
+    """
+    Alterator class for managing and altering table schemas based on provided configurations and validations.
+
+    Attributes:
+        paths (list): List of paths to HQL files.
+        path_key (str): Key for the HQL file path in the configuration.
+        ddl_config_path (str): Path to the DDL configuration file.
+        ddl_file_prefix (str): Prefix for DDL files.
+        ddl_file_suffix (str): Suffix for DDL files.
+        validate (bool): Flag to enable validation mode.
+        force (bool): Flag to force schema updates despite incompatible changes.
+        config (dict): Configuration dictionary read from the DDL configuration file.
+        logger (Logger): Logger instance for logging messages.
+        table_rgx (str): Regular expression for extracting table names from HQL files.
+        column_rgs (str): Regular expression for extracting column definitions from HQL files.
+        hql_paths (list): List of validated HQL file paths.
+        skipped_tables (list): List of tables that were skipped during processing.
+        new_tables (list): List of new tables identified during processing.
+        success_tables (list): List of tables that were successfully updated.
+        errored_tables (list): List of tables that encountered errors during processing.
+        identical_tables (list): List of tables that were found to be identical.
+        aws_account_id (str): AWS account ID.
+
+    Methods:
+        _initialize_paths(): Initializes the HQL paths based on the provided paths and configuration.
+        _filter_files(): Filters the HQL files based on the provided configuration.
+        _read_file_content(fname): Reads the content of a file and processes it.
+        _extract_table_name(data, fname): Extracts the table name from the provided data using a regular expression.
+        _validate_create_statement(data, table_name, fname): Validates if the provided HQL statement is a CREATE statement.
+        _run_initial_validation(data, table_name): Runs initial validation checks on the provided data.
+        _fetch_table_details(db, table): Fetches the details of a specified table from the AWS Glue Catalog.
+        _validate_catalog(tbl_details, table_name): Runs initial validation on the schema present in AWS Glue Catalog.
+        _validate_partition_columns(data, partition_keys, table_name): Validates the partition columns of the given HQL against the partition keys present in AWS Glue Catalog.
+        _compare_schemas(data, columns, partition_keys): Compares the schemas between the provided data and catalog columns.
+        _update_table_schema(db, table, tbl_details, added_cols_dlist, del_cols_dlist, table_name): Updates the schema of a specified table in the database.
+        alter_schema(): Alters the schema of tables based on the provided configurations and validations.
+        get_results(): Generates a dictionary containing the results of the table analysis.
+    """
     def __init__(self, paths, path_key, ddl_config_path, ddl_file_prefix, ddl_file_suffix, validate, force):
         self.paths = paths
         self.path_key = path_key
