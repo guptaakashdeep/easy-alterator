@@ -555,6 +555,8 @@ class Alterator:
                     "num_new": len(self.new_tables),
                     "num_errored": len(self.errored_tables),
                     "num_identical": len(self.identical_tables),
+                    "num_non_parquet_tables": len(self.non_parquet_tables),
+                    "num_iceberg_tables": len(self.iceberg_tables)
                 },
             },
             "skipped_tables": self.skipped_tables,
