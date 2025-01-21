@@ -57,7 +57,7 @@ class Alterator:
         self.config = None
         self.logger = logging.getLogger("EA.process.alterator")
         self.table_rgx = r"""TABLE [IF NOT EXISTS]*\s*`(\w+)[\.](\w+)`"""
-        self.column_rgs = r"""`(\w+)`\s+(\w+(\(\d+,\d+\))?),*"""
+        self.column_rgs = r"""`(\w+)`\s+(\w+((\(\d+,\d+\))|(\(\d+\)))?),*"""
         self.validate = validate
         self.force = force
         self.hql_paths = []
@@ -66,6 +66,8 @@ class Alterator:
         self.success_tables = []
         self.errored_tables = []
         self.identical_tables = []
+        self.non_parquet_tables = []
+        self.iceberg_tables = []
         self.aws_account_id = hfunc.get_account_id()
 
 
@@ -202,7 +204,7 @@ class Alterator:
                 - bool: True if validation fails, otherwise False.
         """
         self.logger.info("*** Running initial validation.***")
-        validation_type, validation_results = hfunc.intial_checks(data)
+        validation_type, validation_results = hfunc.initial_checks(data)
         if validation_results:
             self.logger.info("=> Initial validations are successful for %s.", table_name)
             return None, False
@@ -246,7 +248,7 @@ class Alterator:
                 - dict or None: If validation fails, a dictionary with details of the failure. Otherwise, None.
                 - bool: True if validation fails, False otherwise.
         """
-        catalog_validation_type, catalog_validation = hfunc.intial_checks(tbl_details)
+        catalog_validation_type, catalog_validation = hfunc.initial_checks(tbl_details)
         if catalog_validation:
             self.logger.info("=> Initial validation for catalog passed.")
             return None, False
@@ -427,11 +429,26 @@ class Alterator:
                     continue
 
                 error, skip = self._run_initial_validation(data, table_name)
+                db, table = table_name.split('.')
+                # TODO: Update here to identify Text, Iceberg and new tables.
+                # TODO: add code here to see which validation is actually failed.
+                # and assign it to actual list of tables.
+                # If possible identify the format change tables also here.
                 if skip:
-                    self.skipped_tables.append(error)
+                    if error['type'] == "PARQUET_CHECK":
+                        skip_tbl_details = glue.get_table_details(db, table)
+                        if isinstance(skip_tbl_details, dict):
+                            if "Error" in skip_tbl_details:
+                                self.new_tables.append(table_name)
+                            else:
+                                # TODO: Check here for ICEBERG table type.
+                                self.non_parquet_tables.append(table_name)
+                    else:
+                        # TODO: Check here where these should go
+                        self.skipped_tables.append(error)
                     continue
 
-                db, table = table_name.split('.')
+                # db, table = table_name.split('.')
                 tbl_details, error = self._fetch_table_details(db, table)
                 if error:
                     self.new_tables.append(table_name)
@@ -520,7 +537,8 @@ class Alterator:
                 - "errored_tables" (list): List of tables that encountered errors.
                 - "identical_tables" (list): List of identical tables.
         """
-        return {
+        # return response and write response to S3.
+        alterator_response = {
             "ResponseMetadata": {
                 "validation": str(self.validate),
                 "force": str(self.force),
@@ -529,7 +547,9 @@ class Alterator:
                     + len(self.new_tables)
                     + len(self.errored_tables)
                     + len(self.success_tables)
-                    + len(self.identical_tables),
+                    + len(self.identical_tables)
+                    + len(self.non_parquet_tables)
+                    + len(self.iceberg_tables),
                     "num_updates": len(self.success_tables),
                     "num_skipped": len(self.skipped_tables),
                     "num_new": len(self.new_tables),
@@ -542,4 +562,7 @@ class Alterator:
             "success_tables": self.success_tables,
             "errored_tables": self.errored_tables,
             "identical_tables": self.identical_tables,
+            "non_parquet_tables": self.non_parquet_tables,
+            "iceberg_tables": self.iceberg_tables
         }
+        return alterator_response

@@ -9,7 +9,7 @@ from rules import rule_book as rbook
 logger = logging.getLogger('EA.utils.helper')
 
 
-def intial_checks(table_info):
+def initial_checks(table_info):
     """
     Runs the initial validation rules
     :param table_info: dict
