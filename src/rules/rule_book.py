@@ -38,11 +38,14 @@ def parquet_check(table_obj):
     OUTPUT_SERDE = "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat"
 
     def check_dict_format(table_format_detail):
+        if "SerdeInfo" in table_format_detail:
             return (
-            table_format_detail["SerdeInfo"]["SerializationLibrary"] == PARQUET_ROW_FORMAT
-            and table_format_detail["InputFormat"] == INPUT_SERDE
-            and table_format_detail["OutputFormat"] == OUTPUT_SERDE
-        )
+                table_format_detail["SerdeInfo"]["SerializationLibrary"] == PARQUET_ROW_FORMAT
+                and table_format_detail["InputFormat"] == INPUT_SERDE
+                and table_format_detail["OutputFormat"] == OUTPUT_SERDE
+            )
+        else:
+            return False
 
     def check_str_format(table_str):
         store_regex = r"STORED\s+AS\s+(\w+)"
@@ -148,19 +151,37 @@ def check_dtype_compatibility(df, query_engine="athena"):
     return True, compatible_cols, incompatible_cols
 
 
+def iceberg_check(table_obj) -> bool:
+    # TODO: Implement code with regex to check from HQL.
+    if isinstance(table_obj, str):
+        FMT_RGX = r"USING\s+(\w+)"
+        fmt_match = re.search(FMT_RGX, table_obj, flags=re.IGNORECASE)
+        if not fmt_match or fmt_match.group(1).upper() != "ICEBERG":
+            return False
+        else:
+            return True
+    if isinstance(table_obj, dict):
+        table_format = table_obj.get('Table')\
+            .get('Parameters', {})\
+            .get('table_type','').upper()
+        return True if table_format == "ICEBERG" else False
+
+
 INITIAL_RULE_DICT = {
     "EXTERNAL_TABLE": external_table_check,
     "PARQUET_CHECK": parquet_check,
+    "ICEBERG_CHECK": iceberg_check
 }
 
 QUERY_ENG_DTYPE_COMPATIBILITY = {
     "athena": {
-        "STRING": ["BYTE", "TINYINT", "SMALLINT", "INT", "BIGINT"],
+        "STRING": ["BYTE", "TINYINT", "SMALLINT", "INT", "BIGINT", "VARCHAR"],
         "BYTE": ["TINYINT", "SMALLINT", "INT", "BIGINT"],
         "TINYINT": ["SMALLINT", "INT", "BIGINT"],
         "SMALLINT": ["INT", "BIGINT"],
         "INT": ["BIGINT"],
         "FLOAT": ["DOUBLE"],
-        "DECIMAL": ["DECIMAL"]
+        "DECIMAL": ["DECIMAL"],
+        "VARCHAR": ["VARCHAR"]
     }
 }

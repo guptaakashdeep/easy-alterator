@@ -18,13 +18,17 @@ def initial_checks(table_info):
     # RULES:
     # 1. TABLE_TYPE is EXTERNAL
     # 2. TABLE IS A PARQUET TABLE => check serde info
+    # Run all the initial rules before sending the response.
+    validation_results = {}
     for key, value in rbook.INITIAL_RULE_DICT.items():
         vresult = value(table_info)
         if not vresult:
             logger.error("%s validation failed.", key)
-            # TODO: MAYBE update this later to something more meaningful ? A failure event ?
-            return key, False
-    return "all", True
+            validation_results[key] = False
+        else:
+            validation_results[key] = True
+    logger.info("Validation results %s", validation_results)
+    return validation_results
 
 
 def compare_schema(new_col_list, old_col_list):

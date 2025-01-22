@@ -1,6 +1,7 @@
 """Main class for Alterator"""
 import re
 import os
+from typing import Dict, Any
 from rules import rule_book as rbook
 from utils import helper as hfunc
 from utils import glue_utils as glue
@@ -68,6 +69,7 @@ class Alterator:
         self.identical_tables = []
         self.non_parquet_tables = []
         self.iceberg_tables = []
+        self.format_changed_tables = []
         self.aws_account_id = hfunc.get_account_id()
 
 
@@ -204,18 +206,29 @@ class Alterator:
                 - bool: True if validation fails, otherwise False.
         """
         self.logger.info("*** Running initial validation.***")
-        validation_type, validation_results = hfunc.initial_checks(data)
-        if validation_results:
+        validation_results_info = hfunc.initial_checks(data)
+        self.logger.debug("From inside intial validation, Validation Results: %s", validation_results_info)
+        # Check if any validation failed and table is not an ICEBERG table.
+        if all([False not in set(validation_results_info.values()),
+                not validation_results_info["ICEBERG_CHECK"]]):
             self.logger.info("=> Initial validations are successful for %s.", table_name)
             return None, False
         else:
-            self.logger.error("==> Initial validation: %s failed for provided HQL %s.", validation_type, table_name)
-            return {
-                "table_name": table_name,
-                "reason": "ValidationError",
-                "type": validation_type,
-                "from": "HQL",
-            }, True
+            self.logger.error("==> Initial validation failed for provided HQL %s OR an iceberg table.", table_name)
+            # Maybe Update the reason to make it more suitable? :thinking:
+            # Validations include initial checks name from RULE_BOOk that are failed.
+            # + if ICEBERG check is passed.
+            validations = list(filter(lambda x: not validation_results_info[x] and x != "ICEBERG_CHECK", validation_results_info)) + (["ICEBERG_CHECK"] if validation_results_info["ICEBERG_CHECK"] else [])
+            self.logger.debug(f"From inside intial validation, Validations: {validations}" )
+            if validations:
+                return {
+                    "table_name": table_name,
+                    "reason": "ValidationError",
+                    "type": validations,
+                    "from": "HQL",
+                }, True
+            else:
+                return None, False
 
     def _fetch_table_details(self, db, table):
         """
@@ -248,8 +261,8 @@ class Alterator:
                 - dict or None: If validation fails, a dictionary with details of the failure. Otherwise, None.
                 - bool: True if validation fails, False otherwise.
         """
-        catalog_validation_type, catalog_validation = hfunc.initial_checks(tbl_details)
-        if catalog_validation:
+        catalog_validation_info = hfunc.initial_checks(tbl_details)
+        if False not in set(catalog_validation_info.values()):
             self.logger.info("=> Initial validation for catalog passed.")
             return None, False
         else:
@@ -257,7 +270,7 @@ class Alterator:
             return {
                 "table_name": table_name,
                 "reason": "ValidationError",
-                "type": catalog_validation_type,
+                "type": list(filter(lambda x: not catalog_validation_info[x], catalog_validation_info)),
                 "from": "CATALOG",
             }, True
 
@@ -371,6 +384,25 @@ class Alterator:
 
         return success_response, True
 
+    def _check_format_changed(self, tbl_details: Dict[str, Any], hql_format: str) -> Dict[str, Any]:
+        # Assumed default format is TEXT
+        # TODO: Update this to identify the actual format.
+        catalog_format = "TEXT"
+        is_catalog_parquet = rbook.parquet_check(tbl_details)
+        if is_catalog_parquet:
+            catalog_format = "PARQUET"
+        is_catalog_iceberg = rbook.iceberg_check(tbl_details)
+        if is_catalog_iceberg:
+            catalog_format = "ICEBERG"
+        
+        if catalog_format == hql_format.upper():
+            return False, {}
+        else:
+            return True, {
+                "old_format": catalog_format if catalog_format else "TEXT",
+                "new_format": hql_format.upper()
+            }
+
     def alter_schema(self):
         """
         Alters the schema of tables based on the provided configurations and validations.
@@ -429,35 +461,64 @@ class Alterator:
                     continue
 
                 error, skip = self._run_initial_validation(data, table_name)
+                self.logger.info("Validation results: %s", error)
                 db, table = table_name.split('.')
-                # TODO: Update here to identify Text, Iceberg and new tables.
-                # TODO: add code here to see which validation is actually failed.
+                # Identify Text, Iceberg and new tables.
+                # Checks which validation is failed
                 # and assign it to actual list of tables.
-                # If possible identify the format change tables also here.
+                # Identify the format change tables also here.
                 if skip:
-                    if error['type'] == "PARQUET_CHECK":
-                        skip_tbl_details = glue.get_table_details(db, table)
-                        if isinstance(skip_tbl_details, dict):
-                            if "Error" in skip_tbl_details:
-                                self.new_tables.append(table_name)
-                            else:
-                                # TODO: Check here for ICEBERG table type.
-                                self.non_parquet_tables.append(table_name)
+                    tbl_info, is_new = self._fetch_table_details(db, table)
+                    if is_new:
+                        self.new_tables.append(table_name)
+                        continue
+                    # If table is not NEW check the validations.
+                    # only parquet tables will be processed from here.
+                    validations = error['type']
+                    if "ICEBERG_CHECK" in validations:
+                        # Check for format change table
+                        is_format_changed, change_details = self._check_format_changed(tbl_info, "ICEBERG")
+                        if is_format_changed:
+                            change_details["table"] = table_name
+                            self.format_changed_tables.append(change_details)
+                        else:
+                            # TODO: Call Iceberg Handler from here ?
+                            self.iceberg_tables.append(table_name)
+                        continue
+                    if "PARQUET_CHECK" in validations:
+                        # Check for format change table
+                        is_format_changed, change_details = self._check_format_changed(tbl_info, "TEXT")
+                        if is_format_changed:
+                            change_details["table"] = table_name
+                            self.format_changed_tables.append(change_details)
+                        else:
+                            self.non_parquet_tables.append(table_name)
+                        continue
+                    if "EXTERNAL_TABLE" in validations:
+                        self.errored_tables.append(table_name)
+                        continue
                     else:
                         # TODO: Check here where these should go
                         self.skipped_tables.append(error)
                     continue
 
-                # db, table = table_name.split('.')
                 tbl_details, error = self._fetch_table_details(db, table)
                 if error:
                     self.new_tables.append(table_name)
                     continue
-
-                error, skip = self._validate_catalog(tbl_details, table_name)
-                if skip:
-                    self.skipped_tables.append(error)
+                
+                # Checks if the format is changed to PARQUET table.
+                is_format_changed, change_details = self._check_format_changed(tbl_details, "PARQUET")
+                if is_format_changed:
+                    change_details["table"] = table_name
+                    self.format_changed_tables.append(change_details)
                     continue
+
+                # TODO: Do we really need this now ???? -- don't think so.
+                # error, skip = self._validate_catalog(tbl_details, table_name)
+                # if skip:
+                #     self.skipped_tables.append(error)
+                #     continue
 
                 partition_keys = tbl_details["Table"]["PartitionKeys"]
                 error, skip = self._validate_partition_columns(data, partition_keys, table_name)
@@ -549,14 +610,16 @@ class Alterator:
                     + len(self.success_tables)
                     + len(self.identical_tables)
                     + len(self.non_parquet_tables)
-                    + len(self.iceberg_tables),
+                    + len(self.iceberg_tables)
+                    + len(self.format_changed_tables),
                     "num_updates": len(self.success_tables),
                     "num_skipped": len(self.skipped_tables),
                     "num_new": len(self.new_tables),
                     "num_errored": len(self.errored_tables),
                     "num_identical": len(self.identical_tables),
                     "num_non_parquet_tables": len(self.non_parquet_tables),
-                    "num_iceberg_tables": len(self.iceberg_tables)
+                    "num_iceberg_tables": len(self.iceberg_tables),
+                    "num_format_changed_tables": len(self.format_changed_tables)
                 },
             },
             "skipped_tables": self.skipped_tables,
@@ -565,6 +628,8 @@ class Alterator:
             "errored_tables": self.errored_tables,
             "identical_tables": self.identical_tables,
             "non_parquet_tables": self.non_parquet_tables,
-            "iceberg_tables": self.iceberg_tables
+            "iceberg_tables": self.iceberg_tables,
+            "format_changed_tables": self.format_changed_tables
         }
+        
         return alterator_response
