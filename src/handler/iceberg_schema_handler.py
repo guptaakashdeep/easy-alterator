@@ -43,9 +43,9 @@ class IcebergSchemaHandler:
                 "commented": bool(col_tup[0])} 
                 for id, col_tup in enumerate(partition_columns, start=1000)
                 ]
-            logger.debug("HQL Partition Details %s", partition_details)
+            self.logger.debug("HQL Partition Details %s", partition_details)
         else:
-            logger.info("No partition columns present in HQL for table %s", self.table)
+            self.logger.info("No partition columns present in HQL for table %s", self.table)
             partition_details = []
         tblprop_matches = re.search(self.tblprop_rgx, self.hql, re.DOTALL)
         if tblprop_matches:
@@ -53,7 +53,7 @@ class IcebergSchemaHandler:
             tblprops = re.findall(r"'([\w.-]+)'='([\w.-]+)'", properties_string)
             tblprop_details = dict(tblprop_details)
         else:
-            logger.info("No TBLPROPERTIES present in HQL for table %s", self.table)
+            self.logger.info("No TBLPROPERTIES present in HQL for table %s", self.table)
             tblprop_details = []
         return column_details, partition_details, tblprop_details
 
@@ -93,8 +93,8 @@ class IcebergSchemaHandler:
             raise Exception("No columns extracted from Glue Catalog.")
 
     def _compare_schemas(self, catalog_details: Dict[str, Any], hql_details: Dict[str, Any]):
-        logger.info("Catalog details received for schema comparison: \n %s", catalog_details)
-        logger.info("HQL details received for schema comparison: \n %s", hql_details)
+        self.logger.info("Catalog details received for schema comparison: \n %s", catalog_details)
+        self.logger.info("HQL details received for schema comparison: \n %s", hql_details)
 
         # Comparing Columns
         if catalog_details.get("columns") and hql_details.get("columns"):
@@ -128,7 +128,7 @@ class IcebergSchemaHandler:
         hql_tblprops = hql_details.get("table_properties")
         if not self.migration:
             if catalog_tblprops and hql_tblprops:
-                logger.debug("Both CATALOG and HQL Props are present.")
+                self.logger.debug("Both CATALOG and HQL Props are present.")
                 # Checks keys that are removed
                 removed_props: List[str] = list(set(catalog_tblprops.keys()) - set(hql_tblprops.keys()))
                 # Check for any new key added
