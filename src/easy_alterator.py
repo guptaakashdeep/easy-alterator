@@ -1,7 +1,8 @@
 """Entry point for Easy Alterator functionality."""
 import argparse
 import sys
-from bin.process import sync_tables, alterator
+from bin.process import sync_tables
+from bin.alterator import Alterator
 import logging
 
 
@@ -134,15 +135,17 @@ if __name__ == "__main__":
 
     try:
         logger.info("Alterator process called.")
-        response = alterator(
-            paths=paths,
-            ddl_config_path=ddl_config_path,
-            path_key=path_key,
-            ddl_file_prefix=ddl_file_prefix,
-            ddl_file_suffix=ddl_file_suffix,
-            validate=validate,
-            force=force
+        alterator_process = Alterator(
+            paths,
+            path_key,
+            ddl_config_path,
+            ddl_file_prefix,
+            ddl_file_suffix,
+            validate,
+            force
         )
+        alterator_process.alter_schema()
+        response = alterator_process.get_results()
         logger.info("Alterator process completed successfully.")
         print(response)
     except Exception as ex:

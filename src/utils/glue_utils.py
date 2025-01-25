@@ -71,7 +71,7 @@ def update_table_schema(table, new_cols, del_cols):
     else:
         updated_columns = new_cols_list
 
-    logger.debug(f"Final cols list ==> {updated_columns}")
+    logger.debug("Final cols list ==> %s", updated_columns)
     updated_table["Table"]["StorageDescriptor"]["Columns"] = updated_columns
 
     up_response = glue_client.update_table(
@@ -80,10 +80,10 @@ def update_table_schema(table, new_cols, del_cols):
 
     # Check if the update is successful or not.
     if up_response["ResponseMetadata"]["HTTPStatusCode"] == 200:
-        logger.info(f"Update successful for {db_name}.{table_name}")
+        logger.info("Update successful for %s.%s", db_name, table_name)
         return True, f"{db_name}.{table_name}", None
     else:
-        logger.error(f"Update failure for {db_name}.{table_name}")
+        logger.error("Update failure for %s.%s", db_name, table_name)
         return False, f"{db_name}.{table_name}", up_response["Error"]
 
 
@@ -102,7 +102,7 @@ def get_latest_table_version(database, table):
             version_id = response['TableVersions'][0]['VersionId']
             return version_id
         else:
-            logger.critical(f"No version available for the {database}.{table}")
+            logger.critical("No version available for the %s.%s", database, table)
             raise Exception(f"No version available for the {database}.{table}")
     except ClientError as error:
         err_response = error.response
