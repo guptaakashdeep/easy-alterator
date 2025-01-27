@@ -1,13 +1,14 @@
 """Main class for Alterator"""
 import re
 import os
+import logging
 from typing import Dict, Any
 from rules import rule_book as rbook
 from utils import helper as hfunc
 from utils import glue_utils as glue
 from utils import file_utils as futils
 from utils import s3_utils as s3utils
-import logging
+from handler.iceberg_schema_handler import IcebergSchemaHandler
 
 
 class Alterator:
@@ -481,9 +482,17 @@ class Alterator:
                         if is_format_changed:
                             change_details["table"] = table_name
                             self.format_changed_tables.append(change_details)
+                            ic_handler = IcebergSchemaHandler(table_name, data, requires_migration=True)
                         else:
                             # TODO: Call Iceberg Handler from here ?
-                            self.iceberg_tables.append(table_name)
+                            ic_handler = IcebergSchemaHandler(table_name, data, requires_migration=False)
+                        # Get all the iceberg schema updates
+                        schema_updates = ic_handler.get_schema_updates()
+                        # If there are updates, add it to Iceberg List else to identical list
+                        if schema_updates:
+                            self.iceberg_tables.append(schema_updates)
+                        else:
+                            self.identical_tables.append(table_name)
                         continue
                     if "PARQUET_CHECK" in validations:
                         # Check for format change table
