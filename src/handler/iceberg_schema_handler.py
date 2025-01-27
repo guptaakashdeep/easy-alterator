@@ -53,7 +53,7 @@ class IcebergSchemaHandler:
         self.migration = requires_migration
         self.logger = logging.getLogger("EA.handler.iceberg_handler")
         self.col_rgx = (
-            r"""(--\s*[^\n`]+)?\s*`([\w-]+)`\s+(\w+((\(\d+,\d+\))|(\(\d+\)))?),*"""
+            r"""(--\s*[^\n`]*)?\s*`([\w-]+)`\s+(\w+((\(\d+,\d+\))|(\(\d+\)))?),*"""
         )
         self.partition_col_rgx = r"""PARTITIONED BY \(\s*((?:(?:--[^\n]*)?\s*`[^`]+`\s*(?:,|\n|\r\n)?\s*)+)\)"""
         self.tblprop_rgx = (
@@ -77,11 +77,11 @@ class IcebergSchemaHandler:
             for id, column in enumerate(column_matches, start=1)
         ]
 
-        partition_matches = re.search(self.partition_col_rgx, self.hql, re.DOTALL)
+        partition_matches = re.search(self.partition_col_rgx, self.hql, re.DOTALL | re.IGNORECASE)
         if partition_matches:
             columns_string = partition_matches.group(1)
             partition_columns = re.findall(
-                r"(--[^\n`]+)?\s*`([^`]+)`", columns_string, re.DOTALL
+                r"(--[^\n`]*)?\s*`([^`]+)`", columns_string, re.DOTALL | re.IGNORECASE
             )
             partition_details = [
                 {"field-id": id, "name": col_tup[1], "commented": bool(col_tup[0])}
@@ -94,7 +94,7 @@ class IcebergSchemaHandler:
             )
             partition_details = []
 
-        tblprop_matches = re.search(self.tblprop_rgx, self.hql, re.DOTALL)
+        tblprop_matches = re.search(self.tblprop_rgx, self.hql, re.DOTALL | re.IGNORECASE)
         if tblprop_matches:
             properties_string = tblprop_matches.group(1)
             tblprops = re.findall(r"'([\w.-]+)'='([\w.-]+)'", properties_string)
@@ -396,10 +396,15 @@ class IcebergSchemaHandler:
         }
 
         results = self._compare_schemas(catalog_details, hql_details)
+        results["migration"] = self.migration
         self.logger.info("Schema comparison results: \n %s", results)
 
         # Filter out all the keys that has no data from results nested dict
-        return self.clean_results(results)
+        cleaned_result = self.clean_results(results)
+
+        return cleaned_result if cleaned_result.get("columns") or \
+                cleaned_results.get("partition_columns") or \
+                cleaned_results.get("tblprops") else {}
 
     def clean_results(self, result: Union[Dict, List]) -> Dict[str, Any]:
         """
