@@ -444,7 +444,7 @@ class Alterator:
                 self.logger.info("###### Process started for %s ######", fname)
                 data = self._read_file_content(fname)
                 if not data:
-                    continue
+                    raise Exception(f"No Content found for {fname}")
                 table_name, skip = self._extract_table_name(data, fname)
                 if skip:
                     self.skipped_tables.append(
@@ -480,11 +480,10 @@ class Alterator:
                         # Check for format change table
                         is_format_changed, change_details = self._check_format_changed(tbl_info, "ICEBERG")
                         if is_format_changed:
-                            change_details["table"] = table_name
+                            change_details["table_name"] = table_name
                             self.format_changed_tables.append(change_details)
                             ic_handler = IcebergSchemaHandler(table_name, data, requires_migration=True)
                         else:
-                            # TODO: Call Iceberg Handler from here ?
                             ic_handler = IcebergSchemaHandler(table_name, data, requires_migration=False)
                         # Get all the iceberg schema updates
                         schema_updates = ic_handler.get_schema_updates()
@@ -498,7 +497,7 @@ class Alterator:
                         # Check for format change table
                         is_format_changed, change_details = self._check_format_changed(tbl_info, "TEXT")
                         if is_format_changed:
-                            change_details["table"] = table_name
+                            change_details["table_name"] = table_name
                             self.format_changed_tables.append(change_details)
                         else:
                             self.non_parquet_tables.append(table_name)
@@ -519,7 +518,7 @@ class Alterator:
                 # Checks if the format is changed to PARQUET table.
                 is_format_changed, change_details = self._check_format_changed(tbl_details, "PARQUET")
                 if is_format_changed:
-                    change_details["table"] = table_name
+                    change_details["table_name"] = table_name
                     self.format_changed_tables.append(change_details)
                     continue
 
@@ -584,6 +583,7 @@ class Alterator:
 
         except Exception as e:
             self.logger.error("An error occurred: %s", e)
+            raise e
 
     def get_results(self):
         """

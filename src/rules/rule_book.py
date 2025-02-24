@@ -129,9 +129,11 @@ def check_dtype_compatibility(df, query_engine="athena"):
     :return: bool
     """
     compatibility_dict = QUERY_ENG_DTYPE_COMPATIBILITY[query_engine]
+    # TODO: Maybe needs further additional checks for precision changes in case of decimal.
+    # This is a quick fix and doesn't cover the edge cases.
     df["compatible"] = df.apply(
         lambda x: 1
-        if x["Type_new"].upper() in compatibility_dict.get(x["Type_old"].upper(), [])
+        if re.sub(r'\([^)]*\)', '', x["Type_new"]).upper() in compatibility_dict.get(x["Type_old"].upper(), [])
         else 0,
         axis=1,
     )
@@ -167,6 +169,22 @@ def iceberg_check(table_obj) -> bool:
         return True if table_format == "ICEBERG" else False
 
 
+def convert_varchar(data_type):
+    """Converts any 'varchar' string to string"""
+    return re.sub(r'varchar\(\d+\)', 'string', data_type, flags=re.IGNORECASE)
+
+def _process_decimal_type(column_type):
+    decimal_pattern = r'decimal\((\d+),\s*(\d+)\)'
+    return re.sub(decimal_pattern, r'decimal(\1, \2)', column_type)
+
+
+def convert_data_type(column_type):
+    if column_type.lower().startswith('varchar'):
+        return convert_varchar(column_type)
+    if column_type.lower().startswith('decimal'):
+        return _process_decimal_type(column_type)
+    return SPARK_DTYPE_MAP.get(column_type, column_type)
+
 INITIAL_RULE_DICT = {
     "EXTERNAL_TABLE": external_table_check,
     "PARQUET_CHECK": parquet_check,
@@ -185,3 +203,14 @@ QUERY_ENG_DTYPE_COMPATIBILITY = {
         "VARCHAR": ["VARCHAR"]
     }
 }
+
+# HQL DTYPE to SPARK DTYPE
+SPARK_DTYPE_MAP = {
+    "bigint": "long"
+}
+
+# ICEBERG DEFAULT PROP EXCLUSION
+ICEBERG_DEFAULT_PROP = [
+    "write.parquet.compression-codec",
+    "schema.name-mapping.default"
+]

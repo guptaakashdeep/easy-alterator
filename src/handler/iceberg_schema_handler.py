@@ -8,6 +8,7 @@ from operator import itemgetter
 import pandas as pd
 from utils.s3_utils import read_s3_file
 from utils.glue_utils import get_table_details
+from rules.rule_book import convert_data_type, ICEBERG_DEFAULT_PROP
 
 
 class IcebergSchemaHandler:
@@ -53,7 +54,7 @@ class IcebergSchemaHandler:
         self.migration = requires_migration
         self.logger = logging.getLogger("EA.handler.iceberg_handler")
         self.col_rgx = (
-            r"""(--\s*[^\n`]*)?\s*`([\w-]+)`\s+(\w+((\(\d+,\d+\))|(\(\d+\)))?),*"""
+            r"""(--\s*[^\n`]*)?\s*`([\w-]+)`\s+(\w+((\(\d+,\s*\d+\))|(\(\d+\)))?),*"""
         )
         self.partition_col_rgx = r"""PARTITIONED BY \(\s*((?:(?:--[^\n]*)?\s*`[^`]+`\s*(?:,|\n|\r\n)?\s*)+)\)"""
         self.tblprop_rgx = (
@@ -66,12 +67,14 @@ class IcebergSchemaHandler:
         detail from HQL string using REGEX."""
 
         column_matches = re.findall(self.col_rgx, self.hql, flags=re.IGNORECASE)
+        # 1. Handle data type udpates like in Spark `bigint` is defined as `long`
+        # and other such data types.
         # Add commented here to identify delete columns
         column_details = [
             {
                 "id": id,
                 "name": column[1],
-                "type": column[2],
+                "type": convert_data_type(column[2]) if not self.migration else column[2],
                 "commented": True if "--" in column[0] else False,
             }
             for id, column in enumerate(column_matches, start=1)
@@ -156,7 +159,7 @@ class IcebergSchemaHandler:
         self.logger.info(
             "HQL details received for schema comparison: \n %s", hql_details
         )
-        comparison_results = {"table": f"{self.ic_catalog}.{self.table}"}
+        comparison_results = {"table_name": f"{self.ic_catalog}.{self.table}"}
 
         # Comparing Columns
         if catalog_details.get("columns") and hql_details.get("columns"):
@@ -169,6 +172,9 @@ class IcebergSchemaHandler:
                 filter(lambda x: not x["commented"], hql_details.get("columns"))
             )
             hql_df = pd.DataFrame(filtered_cols)
+            # Making columns comparison case insensitive
+            hql_df["name"] = hql_df["name"].str.lower()
+            catalog_df["name"] = catalog_df["name"].str.lower()
 
             # Comparing both the schemas here.
             merged_df = pd.merge(
@@ -240,6 +246,9 @@ class IcebergSchemaHandler:
                 filter(lambda x: not x["commented"], hql_part_columns)
             )
             hql_part_df = pd.DataFrame(filtered_part_cols)[["field-id", "name"]]
+            # Making columns comparison case insensitive
+            hql_part_df['name'] = hql_part_df['name'].str.lower()
+            catalog_part_df['name'] = catalog_part_df['name'].str.lower()
             # Compare partition columns here.
             merged_part_df = pd.merge(
                 catalog_part_df,
@@ -295,8 +304,10 @@ class IcebergSchemaHandler:
             if catalog_tblprops and hql_tblprops:
                 self.logger.debug("Both CATALOG and HQL Props are present.")
                 # Checks keys that are removed
+                # Exclude keys that are default mentioned in ICEBERG_DEFAULT_PROP
+                catalog_filtered_props = list(filter(lambda x: x not in ICEBERG_DEFAULT_PROP, catalog_tblprops.keys()))
                 removed_props: List[str] = list(
-                    set(catalog_tblprops.keys()) - set(hql_tblprops.keys())
+                    set(catalog_filtered_props) - set(hql_tblprops.keys())
                 )
                 # Check for any new key added
                 new_keys = list(set(hql_tblprops.keys()) - set(catalog_tblprops.keys()))
@@ -309,16 +320,20 @@ class IcebergSchemaHandler:
                 common_keys = list(
                     set(catalog_tblprops.keys()).intersection(set(hql_tblprops.keys()))
                 )
+                # FIXME: Check if the common keys properties are matching or not.
+                # before assigning that to update_props
                 updated_props: Union[Dict[str, str], dict] = (
-                    {ckey: hql_tblprops[ckey] for ckey in common_keys}
+                    {ckey: hql_tblprops[ckey] for ckey in common_keys if hql_tblprops[ckey] != catalog_tblprops[ckey]}
                     if common_keys
                     else {}
                 )
             else:
                 updated_props = {}
-                removed_props = (
-                    list(catalog_tblprops.keys()) if catalog_tblprops else []
-                )
+                # TODO: needs revisiting for handling more complex cases:
+                # What happens to the default properties that are not in HQL but
+                # added while table creation ? Can't be filtered simply because
+                # in that case, what happens if those default properties are updated in HQL?
+                removed_props = {} #(list(catalog_tblprops.keys()) if catalog_tblprops else [])
                 new_props = hql_tblprops if hql_tblprops else {}
         else:
             new_props = hql_tblprops if hql_tblprops else {}
@@ -345,7 +360,7 @@ class IcebergSchemaHandler:
         Returns:
             Dict[str, Any]: Dictionary containing schema comparison results with structure:
                 {
-                    'table': str,  # Table name
+                    'table_name': str,  # Table name
                     'columns': {  # Column changes
                         'new': List[Dict],  # New columns added
                         'dropped': List[str],  # Columns removed
@@ -395,16 +410,32 @@ class IcebergSchemaHandler:
             "table_properties": c_tblprop,
         }
 
-        results = self._compare_schemas(catalog_details, hql_details)
-        results["migration"] = self.migration
+        # in case migration is required, check if columns are in order
+        # TODO: Maybe add this behavior based on some config ??
+        if not self.migration:
+            results = self._compare_schemas(catalog_details, hql_details)
+        else:
+            print("Check if sequence is same. If yes then compare schema, else mark it as mismatched sequence.")
+            # Remove commented from hql_column_details and required from catalog_column_details
+            hql_cols = [{k: v for k,v in hql_cdetails.items() if k != "commented"} for hql_cdetails in hql_details["columns"]]
+            catalog_cols = [{k.lower(): v for k,v in cdetails.items() if k != "required"} for cdetails in catalog_details["columns"]]
+            if self._same_order(hql_cols, catalog_cols):
+                results = self._compare_schemas(catalog_details, hql_details)
+            else:
+                results = {
+                    "table_name": f"{self.ic_catalog}.{self.table}",
+                    "sequenceMismatch": 'True'
+                }
+        results["migration"] = str(self.migration)
         self.logger.info("Schema comparison results: \n %s", results)
 
         # Filter out all the keys that has no data from results nested dict
         cleaned_result = self.clean_results(results)
 
         return cleaned_result if cleaned_result.get("columns") or \
-                cleaned_results.get("partition_columns") or \
-                cleaned_results.get("tblprops") else {}
+                cleaned_result.get("partition_columns") or \
+                cleaned_result.get("tblprops") or \
+                cleaned_result.get("sequenceMismatch") else {}
 
     def clean_results(self, result: Union[Dict, List]) -> Dict[str, Any]:
         """
@@ -425,3 +456,7 @@ class IcebergSchemaHandler:
         if isinstance(result, list):
             return [self.clean_results(x) for x in result] if result else None
         return result
+
+    def _same_order(self, list1: List[Dict[str, Any]], list2: List[Dict[str, Any]]) -> bool:
+        """Checks the sequence of elements in dictionary."""
+        return len(list1) == len(list2) and all(d1 == d2 for d1, d2 in zip(list1, list2))
