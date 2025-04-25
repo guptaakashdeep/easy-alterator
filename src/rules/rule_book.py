@@ -120,7 +120,8 @@ def partition_col_check(hql_str_dict, catalog_partn_cols):
     return True
 
 
-def check_dtype_compatibility(df, query_engine="athena"):
+def check_dtype_compatibility(df, query_engine="athena", name_alias="Name",
+            new_type_alias="Type_new", old_type_alias="Type_old"):
     """
     Checks if the changed data type of the column is compatible with the 
     new data type for the mentioned query engine
@@ -129,11 +130,15 @@ def check_dtype_compatibility(df, query_engine="athena"):
     :return: bool
     """
     compatibility_dict = QUERY_ENG_DTYPE_COMPATIBILITY[query_engine]
-    # TODO: Maybe needs further additional checks for precision changes in case of decimal.
-    # This is a quick fix and doesn't cover the edge cases.
+    # TODO: Add logic to handle decimal to decimal conversion, Decimal(Scale, Precision)
+    ## No backfill required for Precision increased, Backfill required for Precision reduced. 
     df["compatible"] = df.apply(
         lambda x: 1
-        if re.sub(r'\([^)]*\)', '', x["Type_new"]).upper() in compatibility_dict.get(x["Type_old"].upper(), [])
+        if (x[new_type_alias].upper() in compatibility_dict.get(x[old_type_alias].upper(), [])
+            or ("decimal" in x[new_type_alias].lower() and "decimal" in x[old_type_alias].lower()
+                and _is_decimal_compatible(x[old_type_alias], x[new_type_alias])
+                )
+        )
         else 0,
         axis=1,
     )
@@ -144,7 +149,7 @@ def check_dtype_compatibility(df, query_engine="athena"):
         for row in incompatible_cols.to_dict(orient="records"):
             logger.warning(
                 '%s data type changed from %s to %s',
-                row["Name"], row["Type_old"], row["Type_new"]
+                row[name_alias], row[old_type_alias], row[new_type_alias]
             )
         logger.warning(
             "==> Please change the data type of the following columns to the compatible data type."
@@ -185,6 +190,30 @@ def convert_data_type(column_type):
         return _process_decimal_type(column_type)
     return SPARK_DTYPE_MAP.get(column_type, column_type)
 
+
+def _is_decimal_compatible(old_type: str, new_type: str) -> bool:
+    """
+    Check if decimal type change is compatible.
+    Compatible: decimal(P,S) to decimal(P2,S) when P2 > P (scale must remain the same)
+    """
+
+    # Use compiled regex patterns for better performance
+    decimal_pattern = re.compile(r'decimal\((\d+),\s*(\d+)\)')
+    
+    old_decimal_match = decimal_pattern.match(old_type)
+    new_decimal_match = decimal_pattern.match(new_type)
+    
+    if old_decimal_match and new_decimal_match:
+        old_precision, old_scale = int(old_decimal_match.group(1)), int(old_decimal_match.group(2))
+        new_precision, new_scale = int(new_decimal_match.group(1)), int(new_decimal_match.group(2))
+        
+        # Compatible only if scale is the same and new precision is greater
+        return old_scale == new_scale and new_precision > old_precision
+    
+    return True
+
+
+
 INITIAL_RULE_DICT = {
     "EXTERNAL_TABLE": external_table_check,
     "PARQUET_CHECK": parquet_check,
@@ -195,6 +224,16 @@ QUERY_ENG_DTYPE_COMPATIBILITY = {
     "athena": {
         "STRING": ["BYTE", "TINYINT", "SMALLINT", "INT", "BIGINT", "VARCHAR"],
         "BYTE": ["TINYINT", "SMALLINT", "INT", "BIGINT"],
+        "TINYINT": ["SMALLINT", "INT", "BIGINT"],
+        "SMALLINT": ["INT", "BIGINT"],
+        "INT": ["BIGINT"],
+        "FLOAT": ["DOUBLE"],
+        "DECIMAL": ["DECIMAL"],
+        "VARCHAR": ["VARCHAR"]
+    },
+    "iceberg": {
+        "STRING": [],
+        "BYTE": [],
         "TINYINT": ["SMALLINT", "INT", "BIGINT"],
         "SMALLINT": ["INT", "BIGINT"],
         "INT": ["BIGINT"],

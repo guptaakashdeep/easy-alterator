@@ -487,11 +487,13 @@ class Alterator:
                             ic_handler = IcebergSchemaHandler(table_name, data, requires_migration=False)
                         # Get all the iceberg schema updates
                         schema_updates = ic_handler.get_schema_updates()
-                        # If there are updates, add it to Iceberg List else to identical list
+                        # If there are updates, add it to Iceberg List else 
+                        # If table is already Iceberg and has no schema updates mark it to identical list.
                         if schema_updates:
                             self.iceberg_tables.append(schema_updates)
                         else:
-                            self.identical_tables.append(table_name)
+                            if not is_format_changed:
+                                self.identical_tables.append(table_name)
                         continue
                     if "PARQUET_CHECK" in validations:
                         # Check for format change table

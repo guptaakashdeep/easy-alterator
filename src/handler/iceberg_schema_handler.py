@@ -8,7 +8,7 @@ from operator import itemgetter
 import pandas as pd
 from utils.s3_utils import read_s3_file
 from utils.glue_utils import get_table_details
-from rules.rule_book import convert_data_type, ICEBERG_DEFAULT_PROP
+from rules.rule_book import convert_data_type, ICEBERG_DEFAULT_PROP, check_dtype_compatibility
 
 
 class IcebergSchemaHandler:
@@ -56,7 +56,7 @@ class IcebergSchemaHandler:
         self.col_rgx = (
             r"""(--\s*[^\n`]*)?\s*`([\w-]+)`\s+(\w+((\(\d+,\s*\d+\))|(\(\d+\)))?),*"""
         )
-        self.partition_col_rgx = r"""PARTITIONED BY \(\s*((?:(?:--[^\n]*)?\s*`[^`]+`\s*(?:,|\n|\r\n)?\s*)+)\)"""
+        self.partition_col_rgx = r"""PARTITIONED BY\s*\(\s*((?:(?:--[^\n]*)?\s*`[^`]+`\s*(?:,|\n|\r\n)?\s*)+)\)"""
         self.tblprop_rgx = (
             r"""TBLPROPERTIES\s*\(\s*((?:'[\w.-]+'='[\w.-]+'\s*,?\s*)+)\)"""
         )
@@ -208,7 +208,7 @@ class IcebergSchemaHandler:
                 .to_dict("records")
             )
 
-            updated_cols = (
+            updated_cols_df = (
                 merged_df.loc[
                     lambda df: (df["name_old"] == df["name_new"])
                     & (df["type_old"] != df["type_new"]),
@@ -221,8 +221,22 @@ class IcebergSchemaHandler:
                         "type_new": "new_type",
                     }
                 )
-                .to_dict("records")
+                # .to_dict("records")
             )
+
+            all_compatible, compatible_df, incompatible_df = check_dtype_compatibility(
+                updated_cols_df,
+                query_engine="iceberg"
+                name_alias="name",
+                old_type_alias="old_type",
+                new_type_alias="new_type")
+
+            updated_cols = {
+                "compatible": compatible_df.to_dict("records")
+            }
+            if not all_compatible:
+                updated_cols["incompatible"] = incompatible_df.to_dict("records")
+            self.logger.debug("Updated Columns: %s", updated_cols)
 
             comparison_results["columns"] = {
                 "new": sorted(new_cols, key=itemgetter("id")),
@@ -257,6 +271,9 @@ class IcebergSchemaHandler:
                 how="outer",
                 suffixes=["_old", "_new"],
             )
+
+            print("#### MERGED DF ####")
+            print(merged_part_df)
             # new partitions cols
             new_part_cols = (
                 merged_part_df.loc[
