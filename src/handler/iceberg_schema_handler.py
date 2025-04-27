@@ -8,7 +8,11 @@ from operator import itemgetter
 import pandas as pd
 from utils.s3_utils import read_s3_file
 from utils.glue_utils import get_table_details
-from rules.rule_book import convert_data_type, ICEBERG_DEFAULT_PROP, check_dtype_compatibility
+from rules.rule_book import (
+    convert_data_type,
+    ICEBERG_DEFAULT_PROP,
+    check_dtype_compatibility,
+)
 
 
 class IcebergSchemaHandler:
@@ -55,11 +59,13 @@ class IcebergSchemaHandler:
         self.logger = logging.getLogger("EA.handler.iceberg_handler")
         self.col_rgx = (
             r"""(--\s*[^\n`]*)?\s*`([\w-]+)`\s+(\w+((\(\d+,\s*\d+\))|(\(\d+\)))?),*"""
+            r"""(?:\s*--\s*(?:renamed_from:\s*([^\s,]+)|after:\s*([^\s,]+)|before:\s*([^\s,]+)))?"""
         )
         self.partition_col_rgx = r"""PARTITIONED BY\s*\(\s*((?:(?:--[^\n]*)?\s*`[^`]+`\s*(?:,|\n|\r\n)?\s*)+)\)"""
         self.tblprop_rgx = (
             r"""TBLPROPERTIES\s*\(\s*((?:'[\w.-]+'='[\w.-]+'\s*,?\s*)+)\)"""
         )
+        self.iceberg_metadata = None
 
     # TODO: Fetch columns, partition details, TBLPROPERTIES,  with sequence from HQL file
     def _get_schema_details_hql(self) -> Tuple[List, List, Dict]:
@@ -72,15 +78,21 @@ class IcebergSchemaHandler:
         # Add commented here to identify delete columns
         column_details = [
             {
-                "id": id,
                 "name": column[1],
-                "type": convert_data_type(column[2]) if not self.migration else column[2],
+                "type": (
+                    convert_data_type(column[2]) if not self.migration else column[2]
+                ),
                 "commented": True if "--" in column[0] else False,
+                "renamed_from": column[6] if len(column) > 6 and column[6] else None,
+                "after": column[7] if len(column) > 7 and column[7] else None,
+                "first": True if len(column) > 8 and column[8] else False,
             }
-            for id, column in enumerate(column_matches, start=1)
+            for _, column in enumerate(column_matches, start=1)
         ]
 
-        partition_matches = re.search(self.partition_col_rgx, self.hql, re.DOTALL | re.IGNORECASE)
+        partition_matches = re.search(
+            self.partition_col_rgx, self.hql, re.DOTALL | re.IGNORECASE
+        )
         if partition_matches:
             columns_string = partition_matches.group(1)
             partition_columns = re.findall(
@@ -97,7 +109,9 @@ class IcebergSchemaHandler:
             )
             partition_details = []
 
-        tblprop_matches = re.search(self.tblprop_rgx, self.hql, re.DOTALL | re.IGNORECASE)
+        tblprop_matches = re.search(
+            self.tblprop_rgx, self.hql, re.DOTALL | re.IGNORECASE
+        )
         if tblprop_matches:
             properties_string = tblprop_matches.group(1)
             tblprops = re.findall(r"'([\w.-]+)'='([\w.-]+)'", properties_string)
@@ -120,6 +134,7 @@ class IcebergSchemaHandler:
     ) -> Tuple[List, List, Dict[str, str]]:
         metadata_str = read_s3_file(metadata_json_path)
         metadata = json.loads(metadata_str)
+        self.iceberg_metadata = metadata
         column_details = metadata["schemas"][metadata["current-schema-id"]]["fields"]
         partition_details = metadata["partition-specs"][metadata["default-spec-id"]][
             "fields"
@@ -150,6 +165,58 @@ class IcebergSchemaHandler:
         else:
             raise Exception("No columns extracted from Glue Catalog.")
 
+    def _get_valid_after_updates(
+        self, after_df: pd.DataFrame, metadata_df: pd.DataFrame
+    ) -> Any:
+        """Validate if after updates are valid."""
+        # 1. if the after column exists in the catalog and not marked for deletion.
+        after_cols_mapping = after_df[["name", "after"]].to_dict("records")
+        after_cols = set([cdict["after"] for cdict in after_cols_mapping])
+        metadata_cols = set(metadata_df["name"].to_list())
+        matching_cols = after_cols.intersection(metadata_cols)
+
+        if not matching_cols:
+            print("After columns are not present in the Table Schema.")
+            return None
+
+        # 2. if the position is already in place - no need for after updates anymore.
+        # Need to check for the sequence in the metadata.json file
+        current_cols_order: List[Dict] = self.iceberg_metadata["schemas"][
+            self.iceberg_metadata["current-schema-id"]
+        ]["fields"]
+        # get the index of next column for matching_cols from the current schema
+        after_col_dict = {}
+        for idx, col_dict in enumerate(current_cols_order):
+            name = col_dict["name"]
+            if name in matching_cols:
+                next_name = (
+                    current_cols_order[idx + 1]["name"]
+                    if idx + 1 < len(current_cols_order)
+                    else None
+                )
+                after_col_dict[name] = next_name
+
+        matching_next_col_df = pd.DataFrame(
+            {
+                "after": list(after_col_dict.keys()),
+                "name": list(after_col_dict.values()),
+            }
+        )
+
+        final_df = pd.merge(
+            after_df,
+            matching_next_col_df,
+            on="after",
+            how="inner",
+            suffixes=["_expected", "_current"],
+        )
+        valid_after_df = final_df.loc[
+            lambda df: df["name_expected"] != df["name_current"]
+        ]
+
+        print("Add validation logics here")
+        return valid_after_df
+
     def _compare_schemas(
         self, catalog_details: Dict[str, Any], hql_details: Dict[str, Any]
     ) -> Dict[str, Any]:
@@ -168,78 +235,127 @@ class IcebergSchemaHandler:
                 catalog_df = catalog_df.rename(columns={"Name": "name", "Type": "type"})
 
             # Filter out all the records that has commented as true -- deleted columns
-            filtered_cols = list(
-                filter(lambda x: not x["commented"], hql_details.get("columns"))
+            # filtered_cols = list(
+            #     filter(lambda x: not x["commented"], hql_details.get("columns"))
+            # )
+            hql_df = pd.DataFrame(hql_details.get("columns"))
+            # Add is_renamed, is_deleted, after, first flags
+            hql_df["is_renamed"] = hql_df["renamed_from"].notna() & (
+                hql_df["renamed_from"] != ""
             )
-            hql_df = pd.DataFrame(filtered_cols)
+            # TODO: how to identify if after has already been applied ?
+            # If doesn't exist, not an issue. goes to new_columns with "after" key.
+            # if exists, check if the previous if the previous id column matching in the metadata.json
+            hql_df["is_after"] = hql_df["after"].notna() & (hql_df["after"] != "")
+            hql_df["is_first"] = hql_df["first"].notna() & (hql_df["first"] != "")
+            hql_df["is_deleted"] = hql_df["commented"].notna() & hql_df["commented"]
+
             # Making columns comparison case insensitive
             hql_df["name"] = hql_df["name"].str.lower()
             catalog_df["name"] = catalog_df["name"].str.lower()
 
-            # Comparing both the schemas here.
+            # For identifying new columns + extended deletes(future implementation).
             merged_df = pd.merge(
-                catalog_df, hql_df, on=["id"], how="outer", suffixes=["_old", "_new"]
+                catalog_df, hql_df, on=["name"], how="outer", suffixes=["_old", "_new"]
             )
 
-            new_cols = (
-                merged_df.loc[
-                    lambda df: (df["name_old"].isna()) & (df["type_old"].isna()),
-                    ["id", "name_new", "type_new"],
-                ]
-                .rename(columns={"name_new": "name", "type_new": "type"})
-                .to_dict("records")
+            # For checking valid renames and deletes.
+            common_df = pd.merge(
+                catalog_df, hql_df, on=["name"], how="inner", suffixes=["_old", "_new"]
             )
 
-            deleted_cols = [
-                row["name_old"]
-                for row in merged_df.loc[
-                    lambda df: (df["name_new"].isna()) & (df["type_new"].isna()),
-                    ["name_old"],
-                ].to_dict("records")
-            ]
+            # Only commented columns are marked for deletion.
+            # TODO: Can be further expanded to support the columns not present in DDL.
+            # S1. Need to identify columns present in catalog but not in DDL.
+            # S2. Missing columns from DDL are not part of renamed columns.
+            deleted_cols = common_df.loc[
+                lambda df: (df["is_deleted"]), ["name"]
+            ].to_dict("records")
 
+            # identify Renamed Columns:
+            # only existing columns in catalog can be renamed.
             renamed_cols = (
-                merged_df.loc[
-                    lambda df: (df["name_old"] != df["name_new"])
-                    & (df["type_old"] == df["type_new"]),
-                    ["name_old", "name_new"],
-                ]
-                .rename(columns={"name_old": "old_name", "name_new": "new_name"})
+                pd.merge(
+                    catalog_df,
+                    hql_df,
+                    left_on="name",
+                    right_on="renamed_from",
+                    how="inner",
+                )[["renamed_from", "name"]]
+                .rename(columns={"name": "new_name", "renamed_from": "old_name"})
                 .to_dict("records")
             )
 
-            updated_cols_df = (
-                merged_df.loc[
-                    lambda df: (df["name_old"] == df["name_new"])
-                    & (df["type_old"] != df["type_new"]),
-                    ["name_old", "type_old", "type_new"],
-                ]
-                .rename(
-                    columns={
-                        "name_old": "name",
-                        "type_old": "old_type",
-                        "type_new": "new_type",
-                    }
-                )
-                # .to_dict("records")
-            )
+            # Identify Updated Columns
+            # Only that are present in catalog can be updated.
+            types_updated_df = common_df.loc[
+                lambda df: df["type_old"] != df["type_new"],
+                ["name", "type_old", "type_new"],
+            ].rename(columns={"type_old": "old_type", "type_new": "new_type"})
 
+            # Check for compatible and incompatible data type changes
             all_compatible, compatible_df, incompatible_df = check_dtype_compatibility(
-                updated_cols_df,
-                query_engine="iceberg"
+                types_updated_df,
+                query_engine="iceberg",
                 name_alias="name",
                 old_type_alias="old_type",
-                new_type_alias="new_type")
+                new_type_alias="new_type",
+            )
 
-            updated_cols = {
-                "compatible": compatible_df.to_dict("records")
-            }
+            updated_cols = {"compatible": compatible_df.to_dict("records")}
             if not all_compatible:
                 updated_cols["incompatible"] = incompatible_df.to_dict("records")
+
+            # Check position based updates
+            # Position can only be UPDATED for the columns that are already existing.
+            cols_with_after_update = common_df.loc[
+                        lambda df: (df["type_old"] == df["type_new"])
+                        & df["is_after"]
+                        & (~df["is_deleted"])
+                    ]
+            if not cols_with_after_update.empty:
+                validated_after_pos_df = self._get_valid_after_updates(
+                        cols_with_after_update,
+                        catalog_df,
+                    )
+                after_position_cols = validated_after_pos_df[["name", "after"]].to_dict("records")
+            else:
+                after_position_cols = None
+
+            # TODO: 1. There can't be more than once column as first for a table.
+            first_position_col = common_df.loc[
+                lambda df: (df["type_old"] == df["type_new"]) & df["is_first"], ["name"]
+            ].to_dict("records")
+
+            # TODO: Validate if first is valid.
+            # 2. Check if the position wise first column is already the marked one.
+            # In this no update required
+
+            # Add Positional Updates in updated cols list
+            if after_position_cols or first_position_col:
+                updated_cols["position_changes"] = []
+                if after_position_cols:
+                    updated_cols["position_changes"].extend(after_position_cols)
+                if first_position_col:
+                    updated_cols["position_changes"].append(
+                        {"first": first_position_col[0]["name"]}
+                    )
+
             self.logger.debug("Updated Columns: %s", updated_cols)
 
+            # New columns identications
+            new_cols = (
+                merged_df.loc[
+                    lambda df: (df["id"].isna()) & (~df["is_renamed"]),
+                    ["id", "name", "type_new", "after", "first"],
+                ]
+                .rename(columns={"type_new": "type"})
+                .to_dict("records")
+            )
+
+            # TODO: update the new parts here. there won't be any: id anymore
             comparison_results["columns"] = {
-                "new": sorted(new_cols, key=itemgetter("id")),
+                "new": new_cols,
                 "dropped": deleted_cols,
                 "renamed": renamed_cols,
                 "updated": updated_cols,
@@ -261,8 +377,8 @@ class IcebergSchemaHandler:
             )
             hql_part_df = pd.DataFrame(filtered_part_cols)[["field-id", "name"]]
             # Making columns comparison case insensitive
-            hql_part_df['name'] = hql_part_df['name'].str.lower()
-            catalog_part_df['name'] = catalog_part_df['name'].str.lower()
+            hql_part_df["name"] = hql_part_df["name"].str.lower()
+            catalog_part_df["name"] = catalog_part_df["name"].str.lower()
             # Compare partition columns here.
             merged_part_df = pd.merge(
                 catalog_part_df,
@@ -322,7 +438,11 @@ class IcebergSchemaHandler:
                 self.logger.debug("Both CATALOG and HQL Props are present.")
                 # Checks keys that are removed
                 # Exclude keys that are default mentioned in ICEBERG_DEFAULT_PROP
-                catalog_filtered_props = list(filter(lambda x: x not in ICEBERG_DEFAULT_PROP, catalog_tblprops.keys()))
+                catalog_filtered_props = list(
+                    filter(
+                        lambda x: x not in ICEBERG_DEFAULT_PROP, catalog_tblprops.keys()
+                    )
+                )
                 removed_props: List[str] = list(
                     set(catalog_filtered_props) - set(hql_tblprops.keys())
                 )
@@ -340,7 +460,11 @@ class IcebergSchemaHandler:
                 # FIXME: Check if the common keys properties are matching or not.
                 # before assigning that to update_props
                 updated_props: Union[Dict[str, str], dict] = (
-                    {ckey: hql_tblprops[ckey] for ckey in common_keys if hql_tblprops[ckey] != catalog_tblprops[ckey]}
+                    {
+                        ckey: hql_tblprops[ckey]
+                        for ckey in common_keys
+                        if hql_tblprops[ckey] != catalog_tblprops[ckey]
+                    }
                     if common_keys
                     else {}
                 )
@@ -350,7 +474,9 @@ class IcebergSchemaHandler:
                 # What happens to the default properties that are not in HQL but
                 # added while table creation ? Can't be filtered simply because
                 # in that case, what happens if those default properties are updated in HQL?
-                removed_props = {} #(list(catalog_tblprops.keys()) if catalog_tblprops else [])
+                removed_props = (
+                    {}
+                )  # (list(catalog_tblprops.keys()) if catalog_tblprops else [])
                 new_props = hql_tblprops if hql_tblprops else {}
         else:
             new_props = hql_tblprops if hql_tblprops else {}
@@ -432,16 +558,24 @@ class IcebergSchemaHandler:
         if not self.migration:
             results = self._compare_schemas(catalog_details, hql_details)
         else:
-            print("Check if sequence is same. If yes then compare schema, else mark it as mismatched sequence.")
+            print(
+                "Check if sequence is same. If yes then compare schema, else mark it as mismatched sequence."
+            )
             # Remove commented from hql_column_details and required from catalog_column_details
-            hql_cols = [{k: v for k,v in hql_cdetails.items() if k != "commented"} for hql_cdetails in hql_details["columns"]]
-            catalog_cols = [{k.lower(): v for k,v in cdetails.items() if k != "required"} for cdetails in catalog_details["columns"]]
+            hql_cols = [
+                {k: v for k, v in hql_cdetails.items() if k != "commented"}
+                for hql_cdetails in hql_details["columns"]
+            ]
+            catalog_cols = [
+                {k.lower(): v for k, v in cdetails.items() if k != "required"}
+                for cdetails in catalog_details["columns"]
+            ]
             if self._same_order(hql_cols, catalog_cols):
                 results = self._compare_schemas(catalog_details, hql_details)
             else:
                 results = {
                     "table_name": f"{self.ic_catalog}.{self.table}",
-                    "sequenceMismatch": 'True'
+                    "sequenceMismatch": "True",
                 }
         results["migration"] = str(self.migration)
         self.logger.info("Schema comparison results: \n %s", results)
@@ -449,10 +583,14 @@ class IcebergSchemaHandler:
         # Filter out all the keys that has no data from results nested dict
         cleaned_result = self.clean_results(results)
 
-        return cleaned_result if cleaned_result.get("columns") or \
-                cleaned_result.get("partition_columns") or \
-                cleaned_result.get("tblprops") or \
-                cleaned_result.get("sequenceMismatch") else {}
+        return (
+            cleaned_result
+            if cleaned_result.get("columns")
+            or cleaned_result.get("partition_columns")
+            or cleaned_result.get("tblprops")
+            or cleaned_result.get("sequenceMismatch")
+            else {}
+        )
 
     def clean_results(self, result: Union[Dict, List]) -> Dict[str, Any]:
         """
@@ -474,6 +612,10 @@ class IcebergSchemaHandler:
             return [self.clean_results(x) for x in result] if result else None
         return result
 
-    def _same_order(self, list1: List[Dict[str, Any]], list2: List[Dict[str, Any]]) -> bool:
+    def _same_order(
+        self, list1: List[Dict[str, Any]], list2: List[Dict[str, Any]]
+    ) -> bool:
         """Checks the sequence of elements in dictionary."""
-        return len(list1) == len(list2) and all(d1 == d2 for d1, d2 in zip(list1, list2))
+        return len(list1) == len(list2) and all(
+            d1 == d2 for d1, d2 in zip(list1, list2)
+        )
