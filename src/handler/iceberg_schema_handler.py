@@ -1,18 +1,22 @@
 """Main Class for getting the Iceberg Table Schema Changes."""
-
-from typing import Dict, Any, Tuple, List, Union
 import json
 import logging
 import re
 from operator import itemgetter
+from typing import Any
+from typing import Dict
+from typing import List
+from typing import Tuple
+from typing import Union
+
 import pandas as pd
-from utils.s3_utils import read_s3_file
+from rules.column_position_manager import ColumnPositionManager
+from rules.rule_book import check_dtype_compatibility
+from rules.rule_book import convert_data_type
+from rules.rule_book import ICEBERG_DEFAULT_PROP
+from rules.rule_book import map_iceberg_to_spark_dtype
 from utils.glue_utils import get_table_details
-from rules.rule_book import (
-    convert_data_type,
-    ICEBERG_DEFAULT_PROP,
-    check_dtype_compatibility,
-)
+from utils.s3_utils import read_s3_file
 
 
 class IcebergSchemaHandler:
@@ -57,9 +61,10 @@ class IcebergSchemaHandler:
         self.catalog = catalog
         self.migration = requires_migration
         self.logger = logging.getLogger("EA.handler.iceberg_handler")
+        # TODO: Update regex to support --backfilled_from:
         self.col_rgx = (
             r"""(--\s*[^\n`]*)?\s*`([\w-]+)`\s+(\w+((\(\d+,\s*\d+\))|(\(\d+\)))?),*"""
-            r"""(?:\s*--\s*(?:renamed_from:\s*([^\s,]+)|after:\s*([^\s,]+)|before:\s*([^\s,]+)))?"""
+            r"""(?:\s*--\s*(?:renamed_from:\s*([^\s,]+)|after:\s*([^\s,]+)|backfilled_from:\s*([^\s,]+)|first))?"""
         )
         self.partition_col_rgx = r"""PARTITIONED BY\s*\(\s*((?:(?:--[^\n]*)?\s*`[^`]+`\s*(?:,|\n|\r\n)?\s*)+)\)"""
         self.tblprop_rgx = (
@@ -67,7 +72,6 @@ class IcebergSchemaHandler:
         )
         self.iceberg_metadata = None
 
-    # TODO: Fetch columns, partition details, TBLPROPERTIES,  with sequence from HQL file
     def _get_schema_details_hql(self) -> Tuple[List, List, Dict]:
         """Fetch Column, partitions and table properties
         detail from HQL string using REGEX."""
@@ -76,6 +80,7 @@ class IcebergSchemaHandler:
         # 1. Handle data type udpates like in Spark `bigint` is defined as `long`
         # and other such data types.
         # Add commented here to identify delete columns
+        # TODO: add backfilled_from column here.
         column_details = [
             {
                 "name": column[1],
@@ -85,7 +90,8 @@ class IcebergSchemaHandler:
                 "commented": True if "--" in column[0] else False,
                 "renamed_from": column[6] if len(column) > 6 and column[6] else None,
                 "after": column[7] if len(column) > 7 and column[7] else None,
-                "first": True if len(column) > 8 and column[8] else False,
+                "backfilled_from": column[8] if len(column) > 8 and column[8] else None,
+                "first": True if len(column) > 9 and column[9] else False,
             }
             for _, column in enumerate(column_matches, start=1)
         ]
@@ -165,6 +171,7 @@ class IcebergSchemaHandler:
         else:
             raise Exception("No columns extracted from Glue Catalog.")
 
+    # TODO: This need changes to identify cascade position changes
     def _get_valid_after_updates(
         self, after_df: pd.DataFrame, metadata_df: pd.DataFrame
     ) -> Any:
@@ -203,6 +210,7 @@ class IcebergSchemaHandler:
             }
         )
 
+        # Identify the updated positions
         final_df = pd.merge(
             after_df,
             matching_next_col_df,
@@ -210,20 +218,33 @@ class IcebergSchemaHandler:
             how="inner",
             suffixes=["_expected", "_current"],
         )
+        # df with details of updated column positions
         valid_after_df = final_df.loc[
             lambda df: df["name_expected"] != df["name_current"]
         ]
+        # Check if there are changes it's causing any cascading effects
+        if valid_after_df.empty:
+            return []
 
-        print("Add validation logics here")
-        return valid_after_df
+        # If changes are present identify direct and cascading position changes
+        position_manager = ColumnPositionManager()
+        positions = position_manager.extract_col_position(after_cols_mapping)
+        position_manager.build_dependency_graph(positions)
+        changes = {
+            cdict["name_expected"]: cdict["after"]
+            for cdict in valid_after_df[["after", "name_expected"]].to_dict("records")
+        }
+        # list of dict with keys: "name", "after" and "reason" [direct, cascade]
+        all_changes = position_manager.generate_position_changes(changes)
+        return all_changes
 
     def _compare_schemas(
         self, catalog_details: Dict[str, Any], hql_details: Dict[str, Any]
     ) -> Dict[str, Any]:
-        self.logger.info(
+        self.logger.debug(
             "Catalog details received for schema comparison: \n %s", catalog_details
         )
-        self.logger.info(
+        self.logger.debug(
             "HQL details received for schema comparison: \n %s", hql_details
         )
         comparison_results = {"table_name": f"{self.ic_catalog}.{self.table}"}
@@ -246,9 +267,15 @@ class IcebergSchemaHandler:
             # TODO: how to identify if after has already been applied ?
             # If doesn't exist, not an issue. goes to new_columns with "after" key.
             # if exists, check if the previous if the previous id column matching in the metadata.json
+            # TODO: add is_backfilled flag here.
             hql_df["is_after"] = hql_df["after"].notna() & (hql_df["after"] != "")
-            hql_df["is_first"] = hql_df["first"].notna() & (hql_df["first"] != "")
+            hql_df["is_first"] = (
+                hql_df["first"].notna() & (hql_df["first"]) & (hql_df["first"] != "")
+            )
             hql_df["is_deleted"] = hql_df["commented"].notna() & hql_df["commented"]
+            hql_df["is_backfilled"] = (
+                hql_df["backfilled_from"].notna() & hql_df["backfilled_from"]
+            )
 
             # Making columns comparison case insensitive
             hql_df["name"] = hql_df["name"].str.lower()
@@ -265,12 +292,32 @@ class IcebergSchemaHandler:
             )
 
             # Only commented columns are marked for deletion.
-            # TODO: Can be further expanded to support the columns not present in DDL.
             # S1. Need to identify columns present in catalog but not in DDL.
             # S2. Missing columns from DDL are not part of renamed columns.
-            deleted_cols = common_df.loc[
-                lambda df: (df["is_deleted"]), ["name"]
-            ].to_dict("records")
+            deleted_cols = [
+                d["name"]
+                for d in common_df.loc[lambda df: (df["is_deleted"]), ["name"]].to_dict(
+                    "records"
+                )
+            ]
+
+            # Non commented deletes:
+            # Columns missing in user provided DDL but present in Catalog metadata
+            # These columns might also be getting renamed so need to be made sure these columns are not part of renamed_from
+            non_commented_deletes = [
+                d["name"]
+                for d in merged_df.loc[
+                    lambda df: (
+                        df["type_new"].isna()
+                        & df["type_old"].notna()
+                        & ~df["name"].isin(df["renamed_from"])
+                    ),
+                    ["name"],
+                ].to_dict("records")
+            ]
+
+            # extend the deleted columns list
+            deleted_cols.extend(non_commented_deletes)
 
             # identify Renamed Columns:
             # only existing columns in catalog can be renamed.
@@ -281,46 +328,78 @@ class IcebergSchemaHandler:
                     left_on="name",
                     right_on="renamed_from",
                     how="inner",
-                )[["renamed_from", "name"]]
-                .rename(columns={"name": "new_name", "renamed_from": "old_name"})
+                    suffixes=["_old", "_new"],
+                )[["renamed_from", "name_new"]]
+                .rename(columns={"name_new": "new_name", "renamed_from": "old_name"})
                 .to_dict("records")
             )
 
             # Identify Updated Columns
+            updated_cols = {}
             # Only that are present in catalog can be updated.
             types_updated_df = common_df.loc[
                 lambda df: df["type_old"] != df["type_new"],
-                ["name", "type_old", "type_new"],
+                ["name", "type_old", "type_new", "after", "first"],
             ].rename(columns={"type_old": "old_type", "type_new": "new_type"})
 
             # Check for compatible and incompatible data type changes
-            all_compatible, compatible_df, incompatible_df = check_dtype_compatibility(
-                types_updated_df,
-                query_engine="iceberg",
-                name_alias="name",
-                old_type_alias="old_type",
-                new_type_alias="new_type",
-            )
+            if not types_updated_df.empty:
+                (
+                    all_compatible,
+                    compatible_df,
+                    incompatible_df,
+                ) = check_dtype_compatibility(
+                    types_updated_df,
+                    query_engine="iceberg",
+                    name_alias="name",
+                    old_type_alias="old_type",
+                    new_type_alias="new_type",
+                )
 
-            updated_cols = {"compatible": compatible_df.to_dict("records")}
-            if not all_compatible:
-                updated_cols["incompatible"] = incompatible_df.to_dict("records")
+                # TODO: inner join incompatible_df with hql_df on name == backfilled_from
+                # to get the backfilled_from column included in incompatible records
+                final_incompatible_df = incompatible_df.merge(
+                    hql_df, on=["name"], how="left"
+                )[["name", "old_type", "new_type", "backfilled_from"]]
+
+                # incompatible column must have a backfilled_from column
+                if not final_incompatible_df[
+                    final_incompatible_df["backfilled_from"].isna()
+                ].empty:
+                    raise ValueError(
+                        f"backfilled_from is missing for column in DDL file for: {comparison_results['table_name']} \n {final_incompatible_df.to_dict('records')}"
+                    )
+
+                updated_cols = {"compatible": compatible_df.to_dict("records")}
+                if not all_compatible:
+                    updated_cols["incompatible"] = final_incompatible_df.to_dict(
+                        "records"
+                    )
 
             # Check position based updates
             # Position can only be UPDATED for the columns that are already existing.
             cols_with_after_update = common_df.loc[
-                        lambda df: (df["type_old"] == df["type_new"])
-                        & df["is_after"]
-                        & (~df["is_deleted"])
-                    ]
+                lambda df: (df["type_old"] == df["type_new"])
+                & df["is_after"]
+                & (~df["is_deleted"])
+            ]
+            after_position_cols = None
+            # Changes for identifying ccascading position changes
             if not cols_with_after_update.empty:
-                validated_after_pos_df = self._get_valid_after_updates(
-                        cols_with_after_update,
-                        catalog_df,
-                    )
-                after_position_cols = validated_after_pos_df[["name", "after"]].to_dict("records")
-            else:
-                after_position_cols = None
+                validated_after_pos = self._get_valid_after_updates(
+                    cols_with_after_update, catalog_df
+                )
+                if validated_after_pos:
+                    after_position_cols = validated_after_pos
+                # if (
+                #     validated_after_pos_df is not None
+                #     and not validated_after_pos_df.empty
+                # ):
+                #     after_position_cols = (
+                #         validated_after_pos_df[["name_expected", "after"]]
+                #         .rename(columns={"name_expected": "name"})
+                #         .to_dict("records")
+                #     )
 
             # TODO: 1. There can't be more than once column as first for a table.
             first_position_col = common_df.loc[
@@ -344,16 +423,21 @@ class IcebergSchemaHandler:
             self.logger.debug("Updated Columns: %s", updated_cols)
 
             # New columns identications
+            # Added a filter to remove any columns present in backfilled_from
+            # Because actual column during schema updates will be renamed to name
+            # present in backfilled_from.
             new_cols = (
                 merged_df.loc[
-                    lambda df: (df["id"].isna()) & (~df["is_renamed"]),
-                    ["id", "name", "type_new", "after", "first"],
+                    lambda df: (df["id"].isna())
+                    & (df["is_renamed"].isna() | ~(df["is_renamed"].fillna(False)))
+                    & (~(df["is_deleted"].fillna(False)))
+                    & (~df["name"].isin(df["backfilled_from"])),
+                    ["name", "type_new", "after", "first"],
                 ]
                 .rename(columns={"type_new": "type"})
                 .to_dict("records")
             )
 
-            # TODO: update the new parts here. there won't be any: id anymore
             comparison_results["columns"] = {
                 "new": new_cols,
                 "dropped": deleted_cols,
@@ -388,14 +472,14 @@ class IcebergSchemaHandler:
                 suffixes=["_old", "_new"],
             )
 
-            print("#### MERGED DF ####")
-            print(merged_part_df)
+            # print("#### MERGED DF ####")
+            # print(merged_part_df)
             # new partitions cols
             new_part_cols = (
                 merged_part_df.loc[
                     lambda df: (df["name_old"].isna()), ["field-id", "name_new"]
                 ]
-                .rename(columns={"name_new": "name"})
+                .rename(columns={"name_new": "name", "field-id": "field_id"})
                 .to_dict("records")
             )
 
@@ -425,7 +509,7 @@ class IcebergSchemaHandler:
 
         # Updating comparison_results dict with Partition cols
         comparison_results["partition_columns"] = {
-            "new": sorted(new_part_cols, key=itemgetter("field-id")),
+            "new": sorted(new_part_cols, key=itemgetter("field_id")),
             "dropped": dropped_part_cols,
             "replaced": replaced_part_cols,
         }
@@ -531,9 +615,12 @@ class IcebergSchemaHandler:
             if not self.migration:
                 metadata_path = self._get_metadata_location(tbl_details)
                 # c_ is to identify catalog columns, i.e. table details in catalog right now
-                c_columns, c_partition_cols, c_tblprop = (
-                    self._get_schema_details_metadata(metadata_path)
-                )
+                (
+                    ic_c_columns,
+                    c_partition_cols,
+                    c_tblprop,
+                ) = self._get_schema_details_metadata(metadata_path)
+                c_columns = map_iceberg_to_spark_dtype(ic_c_columns)
             else:
                 c_columns, c_partition_cols, c_tblprop = self._get_schema_details(
                     tbl_details
