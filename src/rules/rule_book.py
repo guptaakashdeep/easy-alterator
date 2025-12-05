@@ -1,10 +1,13 @@
 """Module for Validation Rules."""
-
-import re
-import pandas as pd
 import logging
+import re
+from typing import Any
+from typing import Dict
+from typing import List
 
-logger = logging.getLogger('EA.rule_book')
+import pandas as pd
+
+logger = logging.getLogger("EA.rule_book")
 
 
 def external_table_check(table_obj):
@@ -40,7 +43,8 @@ def parquet_check(table_obj):
     def check_dict_format(table_format_detail):
         if "SerdeInfo" in table_format_detail:
             return (
-                table_format_detail["SerdeInfo"]["SerializationLibrary"] == PARQUET_ROW_FORMAT
+                table_format_detail["SerdeInfo"]["SerializationLibrary"]
+                == PARQUET_ROW_FORMAT
                 and table_format_detail["InputFormat"] == INPUT_SERDE
                 and table_format_detail["OutputFormat"] == OUTPUT_SERDE
             )
@@ -60,13 +64,18 @@ def parquet_check(table_obj):
 
         row_fmt_regex = r"ROW\s+FORMAT\s+SERDE\s+'([\w\.]+)'"
         row_fmt_match = re.search(row_fmt_regex, table_str, flags=re.IGNORECASE)
-        if not row_fmt_match or row_fmt_match.group(1).lower() != PARQUET_ROW_FORMAT.lower():
+        if (
+            not row_fmt_match
+            or row_fmt_match.group(1).lower() != PARQUET_ROW_FORMAT.lower()
+        ):
             return False
 
         input_serde_regex = r"INPUTFORMAT\s+'([\w\.]+)'"
         output_serde_regex = r"OUTPUTFORMAT\s+'([\w\.]+)'"
         input_serde_match = re.search(input_serde_regex, table_str, flags=re.IGNORECASE)
-        output_serde_match = re.search(output_serde_regex, table_str, flags=re.IGNORECASE)
+        output_serde_match = re.search(
+            output_serde_regex, table_str, flags=re.IGNORECASE
+        )
         return (
             input_serde_match
             and output_serde_match
@@ -86,44 +95,78 @@ def partition_col_check(hql_str_dict, catalog_partn_cols):
     Compares the partition columns from the already existing column.
     :param hql_str_dict: hql string or partition cols list of dict
     :param catalog_partn_cols: already existing partition columns list
-    :return: bool
+    :return: Tuple of (bool, bool)
     """
+
     def parse_hql(hql_str):
         partition_regex = r"PARTITIONED\s+BY\s+\(([\w`\s,]+)\)"
         match = re.search(partition_regex, hql_str, flags=re.IGNORECASE)
         if match:
-            partition_cols = re.sub(r"\s+", " ", match.group(1).lower().strip().replace("`", "")).split(",")
-            return [{"Name": col.split()[0], "Type": col.split()[1]} for col in partition_cols]
+            partition_cols = re.sub(
+                r"\s+", " ", match.group(1).lower().strip().replace("`", "")
+            ).split(",")
+            return [
+                {"Name": col.split()[0], "Type": col.split()[1]}
+                for col in partition_cols
+            ]
         return []
 
-    hql_df = pd.DataFrame(hql_str_dict if isinstance(hql_str_dict, list) else parse_hql(hql_str_dict))
+    hql_df = pd.DataFrame(
+        hql_str_dict if isinstance(hql_str_dict, list) else parse_hql(hql_str_dict)
+    )
     catalog_df = pd.DataFrame(catalog_partn_cols)
 
+    # Some partition column is either added or removed
     if hql_df.shape[0] != catalog_df.shape[0]:
         logger.error("=> Partitions column mismatch")
-        return False
+        return False, False
 
     if hql_df.empty or catalog_df.empty:
         logger.info("=> No partitions found.")
-        return True
+        return True, False
 
-    merged_df = pd.merge(hql_df, catalog_df, on="Name", how="outer", suffixes=("_new", "_old"))
+    hql_df["row_index"] = hql_df.index
+    catalog_df["row_index"] = catalog_df.index
+
+    # Checks both the ordering and names
+    merged_df = pd.merge(
+        hql_df,
+        catalog_df,
+        on=["row_index", "Name"],
+        how="outer",
+        suffixes=("_new", "_old"),
+    )
+
+    # For checking if only order is changed
+    hql_names = set(hql_df["Name"].dropna())
+    catalog_names = set(catalog_df["Name"].dropna())
+
+    # print(merged_df)
+
+    # merged_df = pd.merge(
+    #     hql_df, catalog_df, on="Name", how="outer", suffixes=("_new", "_old")
+    # )
     if merged_df["Type_new"].isna().any() or merged_df["Type_old"].isna().any():
         logger.error("Partition column mismatch.")
-        return False
+        return False, hql_names == catalog_names
 
     if (merged_df["Type_new"] != merged_df["Type_old"]).any():
         logger.error("=> Partition column data type mismatch.")
-        return False
+        return False, hql_names == catalog_names
 
     logger.debug("=> Partition columns match")
-    return True
+    return True, False
 
 
-def check_dtype_compatibility(df, query_engine="athena", name_alias="Name",
-            new_type_alias="Type_new", old_type_alias="Type_old"):
+def check_dtype_compatibility(
+    df,
+    query_engine="athena",
+    name_alias="Name",
+    new_type_alias="Type_new",
+    old_type_alias="Type_old",
+):
     """
-    Checks if the changed data type of the column is compatible with the 
+    Checks if the changed data type of the column is compatible with the
     new data type for the mentioned query engine
     :param df: pandas dataframe
     :param query_engine: str, query engine name. Default is "athena"
@@ -131,13 +174,17 @@ def check_dtype_compatibility(df, query_engine="athena", name_alias="Name",
     """
     compatibility_dict = QUERY_ENG_DTYPE_COMPATIBILITY[query_engine]
     # TODO: Add logic to handle decimal to decimal conversion, Decimal(Scale, Precision)
-    ## No backfill required for Precision increased, Backfill required for Precision reduced. 
+    # No backfill required for Precision increased, Backfill required for Precision reduced.
     df["compatible"] = df.apply(
         lambda x: 1
-        if (x[new_type_alias].upper() in compatibility_dict.get(x[old_type_alias].upper(), [])
-            or ("decimal" in x[new_type_alias].lower() and "decimal" in x[old_type_alias].lower()
+        if (
+            x[new_type_alias].upper()
+            in compatibility_dict.get(x[old_type_alias].upper(), [])
+            or (
+                "decimal" in x[new_type_alias].lower()
+                and "decimal" in x[old_type_alias].lower()
                 and _is_decimal_compatible(x[old_type_alias], x[new_type_alias])
-                )
+            )
         )
         else 0,
         axis=1,
@@ -148,8 +195,10 @@ def check_dtype_compatibility(df, query_engine="athena", name_alias="Name",
         logger.info("==> Incompatible data type change found in the DDL: ")
         for row in incompatible_cols.to_dict(orient="records"):
             logger.warning(
-                '%s data type changed from %s to %s',
-                row[name_alias], row[old_type_alias], row[new_type_alias]
+                "%s data type changed from %s to %s",
+                row[name_alias],
+                row[old_type_alias],
+                row[new_type_alias],
             )
         logger.warning(
             "==> Please change the data type of the following columns to the compatible data type."
@@ -168,27 +217,46 @@ def iceberg_check(table_obj) -> bool:
         else:
             return True
     if isinstance(table_obj, dict):
-        table_format = table_obj.get('Table')\
-            .get('Parameters', {})\
-            .get('table_type','').upper()
+        table_format = (
+            table_obj.get("Table").get("Parameters", {}).get("table_type", "").upper()
+        )
         return True if table_format == "ICEBERG" else False
 
 
 def convert_varchar(data_type):
     """Converts any 'varchar' string to string"""
-    return re.sub(r'varchar\(\d+\)', 'string', data_type, flags=re.IGNORECASE)
+    return re.sub(r"varchar\(\d+\)", "string", data_type, flags=re.IGNORECASE)
+
 
 def _process_decimal_type(column_type):
-    decimal_pattern = r'decimal\((\d+),\s*(\d+)\)'
-    return re.sub(decimal_pattern, r'decimal(\1, \2)', column_type)
+    decimal_pattern = r"decimal\((\d+),\s*(\d+)\)"
+    return re.sub(decimal_pattern, r"decimal(\1, \2)", column_type)
 
 
 def convert_data_type(column_type):
-    if column_type.lower().startswith('varchar'):
+    if column_type.lower().startswith("varchar"):
         return convert_varchar(column_type)
-    if column_type.lower().startswith('decimal'):
+    if column_type.lower().startswith("decimal"):
         return _process_decimal_type(column_type)
+    if column_type.lower() == "timestamp":
+        return "timestamptz"
     return SPARK_DTYPE_MAP.get(column_type, column_type)
+
+
+def reformat_decimal_type(column_type):
+    """Used for Hive data type comparisons - works on Series or single values"""
+    if isinstance(column_type, pd.Series):
+        # Vectorized processing for Series
+        decimal_mask = column_type.str.lower().str.contains("decimal", na=False)
+        result = column_type.copy()
+        if decimal_mask.any():  # Only process if there are decimal types
+            result[decimal_mask] = result[decimal_mask].apply(_process_decimal_type)
+        return result
+    else:
+        # Original logic for single values
+        if "decimal" not in str(column_type).lower():
+            return column_type
+        return _process_decimal_type(column_type)
 
 
 def _is_decimal_compatible(old_type: str, new_type: str) -> bool:
@@ -198,26 +266,42 @@ def _is_decimal_compatible(old_type: str, new_type: str) -> bool:
     """
 
     # Use compiled regex patterns for better performance
-    decimal_pattern = re.compile(r'decimal\((\d+),\s*(\d+)\)')
-    
+    decimal_pattern = re.compile(r"decimal\((\d+),\s*(\d+)\)")
+
     old_decimal_match = decimal_pattern.match(old_type)
     new_decimal_match = decimal_pattern.match(new_type)
-    
+
     if old_decimal_match and new_decimal_match:
-        old_precision, old_scale = int(old_decimal_match.group(1)), int(old_decimal_match.group(2))
-        new_precision, new_scale = int(new_decimal_match.group(1)), int(new_decimal_match.group(2))
-        
+        old_precision, old_scale = int(old_decimal_match.group(1)), int(
+            old_decimal_match.group(2)
+        )
+        new_precision, new_scale = int(new_decimal_match.group(1)), int(
+            new_decimal_match.group(2)
+        )
+
         # Compatible only if scale is the same and new precision is greater
         return old_scale == new_scale and new_precision > old_precision
-    
+
     return True
 
+
+def map_iceberg_to_spark_dtype(
+    columns_detail: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """Maps Iceberg Data Types to Spark Data Types for comparison."""
+    updated_cols = []
+    for col_dict in columns_detail:
+        col_dict["type"] = ICEBERG_TO_SPARK_DTYPE_MAP.get(
+            col_dict["type"], col_dict["type"]
+        )
+        updated_cols.append(col_dict)
+    return updated_cols
 
 
 INITIAL_RULE_DICT = {
     "EXTERNAL_TABLE": external_table_check,
     "PARQUET_CHECK": parquet_check,
-    "ICEBERG_CHECK": iceberg_check
+    "ICEBERG_CHECK": iceberg_check,
 }
 
 QUERY_ENG_DTYPE_COMPATIBILITY = {
@@ -229,27 +313,33 @@ QUERY_ENG_DTYPE_COMPATIBILITY = {
         "INT": ["BIGINT"],
         "FLOAT": ["DOUBLE"],
         "DECIMAL": ["DECIMAL"],
-        "VARCHAR": ["VARCHAR"]
+        "VARCHAR": ["VARCHAR"],
     },
     "iceberg": {
         "STRING": [],
         "BYTE": [],
         "TINYINT": ["SMALLINT", "INT", "BIGINT"],
         "SMALLINT": ["INT", "BIGINT"],
-        "INT": ["BIGINT"],
+        "INT": ["BIGINT", "LONG"],
         "FLOAT": ["DOUBLE"],
         "DECIMAL": ["DECIMAL"],
-        "VARCHAR": ["VARCHAR"]
-    }
+        "VARCHAR": ["VARCHAR"],
+    },
 }
 
-# HQL DTYPE to SPARK DTYPE
+# DDL DTYPE to SPARK DTYPE,
+# SPARK DTYPE to ICEBERG DTYPE
 SPARK_DTYPE_MAP = {
-    "bigint": "long"
+    "bigint": "long",
+}
+
+ICEBERG_TO_SPARK_DTYPE_MAP = {
+    "timestamp": "timestamp_ntz",
+    "timestamptz": "timestamp",
 }
 
 # ICEBERG DEFAULT PROP EXCLUSION
 ICEBERG_DEFAULT_PROP = [
     "write.parquet.compression-codec",
-    "schema.name-mapping.default"
+    "schema.name-mapping.default",
 ]
