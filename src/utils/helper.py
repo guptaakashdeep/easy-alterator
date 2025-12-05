@@ -34,8 +34,8 @@ def initial_checks(table_info):
 def compare_schema(new_col_list, old_col_list):
     """Compares the schema for provided column lists.
     Args:
-        new_col_list (list of dict): _description_
-        old_col_list (list of dict): _description_
+        new_col_list (list of dict): hql columns list
+        old_col_list (list of dict): catalog columns list
 
     Returns:
         tuple (list of dict, list of dict, pandas Dataframe):
@@ -51,7 +51,7 @@ def compare_schema(new_col_list, old_col_list):
     # includes added, deleted and data type changed columns
     combined_cols_df = pd.merge(
         new_df, old_df, on=["Name"], how="outer", suffixes=("_new", "_old")
-    )[["Name", "Type_new", "Type_old"]]
+    )[["Name", "Type_new", "Type_old", "backfilled_from"]]
 
     # new columns df
     new_cols_df = combined_cols_df[combined_cols_df["Type_old"].isna()]
@@ -65,7 +65,10 @@ def compare_schema(new_col_list, old_col_list):
     datatype_changes = combined_cols_df[
         (~combined_cols_df["Type_old"].isna())
         & (~combined_cols_df["Type_new"].isna())
-        & (combined_cols_df["Type_old"] != combined_cols_df["Type_new"])
+        & (
+            rbook.reformat_decimal_type(combined_cols_df["Type_old"])
+            != rbook.reformat_decimal_type(combined_cols_df["Type_new"])
+        )
     ]
     # print("datatype changes \n", datatype_changes)
 
@@ -85,7 +88,7 @@ def compare_schema(new_col_list, old_col_list):
 
     if not datatype_changes.empty:
         logger.warning(
-            '+-+- data type changes records for: %s', datatype_changes["Name"].to_list()
+            "+-+- data type changes records for: %s", datatype_changes["Name"].to_list()
         )
     return added_cols, deleted_cols, datatype_changes
 
