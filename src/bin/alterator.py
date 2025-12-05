@@ -1,14 +1,17 @@
 """Main class for Alterator"""
-import re
-import os
+import json
 import logging
-from typing import Dict, Any
-from rules import rule_book as rbook
-from utils import helper as hfunc
-from utils import glue_utils as glue
-from utils import file_utils as futils
-from utils import s3_utils as s3utils
+import os
+import re
+from typing import Any
+from typing import Dict
+
 from handler.iceberg_schema_handler import IcebergSchemaHandler
+from rules import rule_book as rbook
+from utils import file_utils as futils
+from utils import glue_utils as glue
+from utils import helper as hfunc
+from utils import s3_utils as s3utils
 
 
 class Alterator:
@@ -50,7 +53,17 @@ class Alterator:
         alter_schema(): Alters the schema of tables based on the provided configurations and validations.
         get_results(): Generates a dictionary containing the results of the table analysis.
     """
-    def __init__(self, paths, path_key, ddl_config_path, ddl_file_prefix, ddl_file_suffix, validate, force):
+
+    def __init__(
+        self,
+        paths,
+        path_key,
+        ddl_config_path,
+        ddl_file_prefix,
+        ddl_file_suffix,
+        validate,
+        force
+    ):
         self.paths = paths
         self.path_key = path_key
         self.ddl_config_path = ddl_config_path
@@ -59,7 +72,10 @@ class Alterator:
         self.config = None
         self.logger = logging.getLogger("EA.process.alterator")
         self.table_rgx = r"""TABLE [IF NOT EXISTS]*\s*`(\w+)[\.](\w+)`"""
-        self.column_rgs = r"""`(\w+)`\s+(\w+((\(\d+,\d+\))|(\(\d+\)))?),*"""
+        self.column_rgs = (
+            r"""`(\w+)`\s+(\w+((\(\d+,\s*\d+\))|(\(\d+\)))?),*"""
+            r"""(?:\s*--\s*(?:backfilled_from:\s*([^\s,]+)))?"""
+        )
         self.validate = validate
         self.force = force
         self.hql_paths = []
@@ -72,7 +88,6 @@ class Alterator:
         self.iceberg_tables = []
         self.format_changed_tables = []
         self.aws_account_id = hfunc.get_account_id()
-
 
     def _initialize_paths(self):
         """
@@ -90,7 +105,10 @@ class Alterator:
         # Checks if the DDL Configuration file path exists or not
         if self.ddl_config_path:
             futils.check_paths(self.ddl_config_path)
-            if self.ddl_config_path.endswith(".yaml") and (os.path.isfile(self.ddl_config_path) or self.ddl_config_path.startswith("s3://")):
+            if self.ddl_config_path.endswith(".yaml") and (
+                os.path.isfile(self.ddl_config_path)
+                or self.ddl_config_path.startswith("s3://")
+            ):
                 # Read the configuration YAML file
                 self.config = futils.read_yaml(self.ddl_config_path)
                 # Check if the HQL File path key exists.
@@ -100,9 +118,13 @@ class Alterator:
                     self.hql_paths.append(self.config[self.path_key])
                 else:
                     if not self.paths:
-                        raise Exception(f"Provided key_for_path is not available in {self.ddl_config_path} configuration file")
+                        raise Exception(
+                            f"Provided key_for_path is not available in {self.ddl_config_path} configuration file"
+                        )
             else:
-                raise Exception("Only .yaml configuration files are supported or invalid file path.")
+                raise Exception(
+                    "Only .yaml configuration files are supported or invalid file path."
+                )
 
     def _filter_files(self):
         """
@@ -116,7 +138,10 @@ class Alterator:
         """
         if self.config:
             return futils.filter_files(
-                self.hql_paths, self.ddl_file_prefix, self.ddl_file_suffix, table_names=self.config["tables"]
+                self.hql_paths,
+                self.ddl_file_prefix,
+                self.ddl_file_suffix,
+                table_names=self.config["tables"],
             )
         else:
             return futils.filter_files(
@@ -142,10 +167,17 @@ class Alterator:
         """
         if fname.startswith("s3://"):
             file_content = s3utils.read_s3_file(fname)
-            return file_content.lower().strip().format(aws_account_id=self.aws_account_id)
+            return (
+                file_content.lower().strip().format(aws_account_id=self.aws_account_id)
+            )
         else:
             with open(fname, "r", encoding="utf-8") as filestream:
-                return filestream.read().lower().strip().format(aws_account_id=self.aws_account_id)
+                return (
+                    filestream.read()
+                    .lower()
+                    .strip()
+                    .format(aws_account_id=self.aws_account_id)
+                )
 
     def _extract_table_name(self, data, fname):
         """
@@ -185,7 +217,9 @@ class Alterator:
                    The boolean is True if validation fails, otherwise False.
         """
         if not data.startswith("create"):
-            self.logger.error("==> HQL provided for %s is not a create statement.", table_name)
+            self.logger.error(
+                "==> HQL provided for %s is not a create statement.", table_name
+            )
             return {
                 "table_name": table_name,
                 "filename": fname,
@@ -208,19 +242,38 @@ class Alterator:
         """
         self.logger.info("*** Running initial validation.***")
         validation_results_info = hfunc.initial_checks(data)
-        self.logger.debug("From inside intial validation, Validation Results: %s", validation_results_info)
+        self.logger.debug(
+            "From inside intial validation, Validation Results: %s",
+            validation_results_info,
+        )
         # Check if any validation failed and table is not an ICEBERG table.
-        if all([False not in set(validation_results_info.values()),
-                not validation_results_info["ICEBERG_CHECK"]]):
-            self.logger.info("=> Initial validations are successful for %s.", table_name)
+        if all(
+            [
+                False not in set(validation_results_info.values()),
+                not validation_results_info["ICEBERG_CHECK"],
+            ]
+        ):
+            self.logger.info(
+                "=> Initial validations are successful for %s.", table_name
+            )
             return None, False
         else:
-            self.logger.error("==> Initial validation failed for provided HQL %s OR an iceberg table.", table_name)
+            self.logger.error(
+                "==> Initial validation failed for provided HQL %s OR an iceberg table.",
+                table_name,
+            )
             # Maybe Update the reason to make it more suitable? :thinking:
             # Validations include initial checks name from RULE_BOOk that are failed.
             # + if ICEBERG check is passed.
-            validations = list(filter(lambda x: not validation_results_info[x] and x != "ICEBERG_CHECK", validation_results_info)) + (["ICEBERG_CHECK"] if validation_results_info["ICEBERG_CHECK"] else [])
-            self.logger.debug(f"From inside intial validation, Validations: {validations}" )
+            validations = list(
+                filter(
+                    lambda x: not validation_results_info[x] and x != "ICEBERG_CHECK",
+                    validation_results_info,
+                )
+            ) + (["ICEBERG_CHECK"] if validation_results_info["ICEBERG_CHECK"] else [])
+            self.logger.debug(
+                f"From inside intial validation, Validations: {validations}"
+            )
             if validations:
                 return {
                     "table_name": table_name,
@@ -271,7 +324,12 @@ class Alterator:
             return {
                 "table_name": table_name,
                 "reason": "ValidationError",
-                "type": list(filter(lambda x: not catalog_validation_info[x], catalog_validation_info)),
+                "type": list(
+                    filter(
+                        lambda x: not catalog_validation_info[x],
+                        catalog_validation_info,
+                    )
+                ),
                 "from": "CATALOG",
             }, True
 
@@ -291,7 +349,9 @@ class Alterator:
                                 If validation passes, returns None.
                 - bool: A boolean indicating whether the validation failed (True) or passed (False).
         """
-        partition_validation = rbook.partition_col_check(data, partition_keys)
+        partition_validation, order_changed = rbook.partition_col_check(
+            data, partition_keys
+        )
         if partition_validation:
             self.logger.info("=> Partition Validation passed for %s.", table_name)
             return None, False
@@ -299,7 +359,9 @@ class Alterator:
             self.logger.error("==> Partition Validation failed for %s.", table_name)
             return {
                 "table_name": table_name,
-                "reason": "PartitionValidationError",
+                "reason": "PartitionOrderValidationError"
+                if order_changed
+                else "PartitionValidationError",
             }, True
 
     def _compare_schemas(self, data, columns, partition_keys):
@@ -319,12 +381,19 @@ class Alterator:
                 - merged_df (DataFrame): A DataFrame representing the merged schema comparison.
         """
         hql_cols = re.findall(self.column_rgs, data, flags=re.IGNORECASE)
-        hql_col_dlist = [{"Name": col[0], "Type": col[1]} for col in hql_cols]
+        hql_col_dlist = [
+            {"Name": col[0], "Type": col[1], "backfilled_from": col[5]}
+            for col in hql_cols
+        ]
         catalog_col_list = columns + partition_keys
-        added_cols_dlist, del_cols_dlist, merged_df = hfunc.compare_schema(hql_col_dlist, catalog_col_list)
+        added_cols_dlist, del_cols_dlist, merged_df = hfunc.compare_schema(
+            hql_col_dlist, catalog_col_list
+        )
         return added_cols_dlist, del_cols_dlist, merged_df
 
-    def _update_table_schema(self, db, table, tbl_details, added_cols_dlist, del_cols_dlist, table_name):
+    def _update_table_schema(
+        self, db, table, tbl_details, added_cols_dlist, del_cols_dlist, table_name
+    ):
         """
         Updates the schema of a specified table in the database.
 
@@ -379,13 +448,19 @@ class Alterator:
             },
         }
         if not status:
-            self.logger.error("==> Exception occurred while updating table schema for %s.", table_name)
-            self.logger.error("Exception details: %s - %s", error['Code'], error['Message'])
+            self.logger.error(
+                "==> Exception occurred while updating table schema for %s.", table_name
+            )
+            self.logger.error(
+                "Exception details: %s - %s", error["Code"], error["Message"]
+            )
             return success_response, False
 
         return success_response, True
 
-    def _check_format_changed(self, tbl_details: Dict[str, Any], hql_format: str) -> Dict[str, Any]:
+    def _check_format_changed(
+        self, tbl_details: Dict[str, Any], hql_format: str
+    ) -> Dict[str, Any]:
         # Assumed default format is TEXT
         # TODO: Update this to identify the actual format.
         catalog_format = "TEXT"
@@ -395,13 +470,13 @@ class Alterator:
         is_catalog_iceberg = rbook.iceberg_check(tbl_details)
         if is_catalog_iceberg:
             catalog_format = "ICEBERG"
-        
+
         if catalog_format == hql_format.upper():
             return False, {}
         else:
             return True, {
                 "old_format": catalog_format if catalog_format else "TEXT",
-                "new_format": hql_format.upper()
+                "new_format": hql_format.upper(),
             }
 
     def alter_schema(self):
@@ -463,7 +538,7 @@ class Alterator:
 
                 error, skip = self._run_initial_validation(data, table_name)
                 self.logger.info("Validation results: %s", error)
-                db, table = table_name.split('.')
+                db, table = table_name.split(".")
                 # Identify Text, Iceberg and new tables.
                 # Checks which validation is failed
                 # and assign it to actual list of tables.
@@ -475,19 +550,25 @@ class Alterator:
                         continue
                     # If table is not NEW check the validations.
                     # only parquet tables will be processed from here.
-                    validations = error['type']
+                    validations = error["type"]
                     if "ICEBERG_CHECK" in validations:
                         # Check for format change table
-                        is_format_changed, change_details = self._check_format_changed(tbl_info, "ICEBERG")
+                        is_format_changed, change_details = self._check_format_changed(
+                            tbl_info, "ICEBERG"
+                        )
                         if is_format_changed:
                             change_details["table_name"] = table_name
                             self.format_changed_tables.append(change_details)
-                            ic_handler = IcebergSchemaHandler(table_name, data, requires_migration=True)
+                            ic_handler = IcebergSchemaHandler(
+                                table_name, data, requires_migration=True
+                            )
                         else:
-                            ic_handler = IcebergSchemaHandler(table_name, data, requires_migration=False)
+                            ic_handler = IcebergSchemaHandler(
+                                table_name, data, requires_migration=False
+                            )
                         # Get all the iceberg schema updates
                         schema_updates = ic_handler.get_schema_updates()
-                        # If there are updates, add it to Iceberg List else 
+                        # If there are updates, add it to Iceberg List else
                         # If table is already Iceberg and has no schema updates mark it to identical list.
                         if schema_updates:
                             self.iceberg_tables.append(schema_updates)
@@ -497,7 +578,9 @@ class Alterator:
                         continue
                     if "PARQUET_CHECK" in validations:
                         # Check for format change table
-                        is_format_changed, change_details = self._check_format_changed(tbl_info, "TEXT")
+                        is_format_changed, change_details = self._check_format_changed(
+                            tbl_info, "TEXT"
+                        )
                         if is_format_changed:
                             change_details["table_name"] = table_name
                             self.format_changed_tables.append(change_details)
@@ -516,9 +599,11 @@ class Alterator:
                 if error:
                     self.new_tables.append(table_name)
                     continue
-                
+
                 # Checks if the format is changed to PARQUET table.
-                is_format_changed, change_details = self._check_format_changed(tbl_details, "PARQUET")
+                is_format_changed, change_details = self._check_format_changed(
+                    tbl_details, "PARQUET"
+                )
                 if is_format_changed:
                     change_details["table_name"] = table_name
                     self.format_changed_tables.append(change_details)
@@ -531,50 +616,116 @@ class Alterator:
                 #     continue
 
                 partition_keys = tbl_details["Table"]["PartitionKeys"]
-                error, skip = self._validate_partition_columns(data, partition_keys, table_name)
+                part_error, skip = self._validate_partition_columns(
+                    data, partition_keys, table_name
+                )
+                part_validation = False
                 if skip:
-                    self.skipped_tables.append(error)
-                    continue
+                    part_validation = True
+                    # continue
 
                 # Schema comparison HQL vs GlueCatalog
                 columns = tbl_details["Table"]["StorageDescriptor"]["Columns"]
-                added_cols_dlist, del_cols_dlist, merged_df = self._compare_schemas(data, columns, partition_keys)
+                added_cols_dlist, del_cols_dlist, merged_df = self._compare_schemas(
+                    data, columns, partition_keys
+                )
                 # Data type for column changed
                 if not merged_df.empty:
-                    self.logger.info("****Validating data type compatibility for %s****", table_name)
-                    response, compatible, incompatible = rbook.check_dtype_compatibility(merged_df)
+                    self.logger.info(
+                        "****Validating data type compatibility for %s****", table_name
+                    )
+                    (
+                        response,
+                        compatible,
+                        incompatible,
+                    ) = rbook.check_dtype_compatibility(merged_df)
                     # Incompatible data type change detected
                     if not response:
                         if self.force:
-                            self.logger.warning("FORCE flag is enabled. Table will be updated with incompatible data type changes.")
-                            new_dtype_cols = merged_df[["Name", "Type_new"]].rename(columns={"Type_new": "Type"}).to_dict("records")
-                            old_dtype_cols = merged_df[["Name", "Type_old"]].rename(columns={"Type_old": "Type"}).to_dict("records")
+                            self.logger.warning(
+                                "FORCE flag is enabled. Table will be updated with incompatible data type changes."
+                            )
+                            new_dtype_cols = (
+                                merged_df[["Name", "Type_new"]]
+                                .rename(columns={"Type_new": "Type"})
+                                .to_dict("records")
+                            )
+                            old_dtype_cols = (
+                                merged_df[["Name", "Type_old"]]
+                                .rename(columns={"Type_old": "Type"})
+                                .to_dict("records")
+                            )
                             added_cols_dlist += new_dtype_cols
                             del_cols_dlist += old_dtype_cols
                         else:
-                            self.logger.info("==> Skipping schema update for %s", table_name)
-                            compatible_cols = compatible[["Name", "Type_old", "Type_new"]].rename(columns={"Type_old": "Type", "Type_new": "updated_type"}).to_dict("records")
-                            incompatible_cols = incompatible[["Name", "Type_old", "Type_new"]].rename(columns={"Type_old": "Type", "Type_new": "updated_type"}).to_dict("records")
-                            self.skipped_tables.append({
-                                "table_name": table_name,
-                                "reason": "IncompatibleDataTypeError",
-                                "details": {
-                                    "compatible": compatible_cols,
-                                    "incompatible": incompatible_cols,
-                                    "add": added_cols_dlist,
-                                    "delete": del_cols_dlist,
-                                },
-                            })
+                            self.logger.info(
+                                "==> Skipping schema update for %s", table_name
+                            )
+                            compatible_cols = (
+                                compatible[["Name", "Type_old", "Type_new"]]
+                                .rename(
+                                    columns={
+                                        "Type_old": "Type",
+                                        "Type_new": "updated_type",
+                                    }
+                                )
+                                .to_dict("records")
+                            )
+                            incompatible_cols = (
+                                incompatible[
+                                    ["Name", "Type_old", "Type_new", "backfilled_from"]
+                                ]
+                                .rename(
+                                    columns={
+                                        "Type_old": "Type",
+                                        "Type_new": "updated_type",
+                                    }
+                                )
+                                .to_dict("records")
+                            )
+                            self.skipped_tables.append(
+                                {
+                                    "table_name": table_name,
+                                    "reason": "IncompatibleDataTypeError"
+                                    if not part_validation
+                                    else "IncompatibleDataTypeAndPartitionValidationError",
+                                    "details": {
+                                        "compatible": compatible_cols,
+                                        "incompatible": incompatible_cols,
+                                        "add": added_cols_dlist,
+                                        "delete": del_cols_dlist,
+                                    },
+                                }
+                            )
                             continue
                     else:
                         if not compatible.empty:
                             self.logger.info("Getting compatible datatype columns.")
-                            new_dtype_cols = compatible[["Name", "Type_new"]].rename(columns={"Type_new": "Type"}).to_dict("records")
-                            old_dtype_cols = compatible[["Name", "Type_old"]].rename(columns={"Type_old": "Type"}).to_dict("records")
+                            new_dtype_cols = (
+                                compatible[["Name", "Type_new"]]
+                                .rename(columns={"Type_new": "Type"})
+                                .to_dict("records")
+                            )
+                            old_dtype_cols = (
+                                compatible[["Name", "Type_old"]]
+                                .rename(columns={"Type_old": "Type"})
+                                .to_dict("records")
+                            )
                             added_cols_dlist += new_dtype_cols
                             del_cols_dlist += old_dtype_cols
 
-                success_response, status = self._update_table_schema(db, table, tbl_details, added_cols_dlist, del_cols_dlist, table_name)
+                # This will only execute if there are partition changes
+                # and NO datatype incompatible changes.
+                # Adding it later, makes sure both the cases are handled.
+                # 1. Changes in partitioning + Incompatible data type changes
+                # 2. Only Changes in partitioning
+                if part_validation:
+                    self.skipped_tables.append(part_error)
+                    continue
+
+                success_response, status = self._update_table_schema(
+                    db, table, tbl_details, added_cols_dlist, del_cols_dlist, table_name
+                )
                 if status:
                     if success_response:
                         self.success_tables.append(success_response)
@@ -630,7 +781,7 @@ class Alterator:
                     "num_identical": len(self.identical_tables),
                     "num_non_parquet_tables": len(self.non_parquet_tables),
                     "num_iceberg_tables": len(self.iceberg_tables),
-                    "num_format_changed_tables": len(self.format_changed_tables)
+                    "num_format_changed_tables": len(self.format_changed_tables),
                 },
             },
             "skipped_tables": self.skipped_tables,
@@ -640,7 +791,6 @@ class Alterator:
             "identical_tables": self.identical_tables,
             "non_parquet_tables": self.non_parquet_tables,
             "iceberg_tables": self.iceberg_tables,
-            "format_changed_tables": self.format_changed_tables
+            "format_changed_tables": self.format_changed_tables,
         }
-        
         return alterator_response
