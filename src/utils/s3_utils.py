@@ -90,3 +90,17 @@ def read_s3_file(s3_path):
     except ClientError:
         return ""
     return response["Body"].read().decode("utf-8")
+
+
+def write_to_s3(s3_path, data):
+    """
+    Reads the S3 file.
+    :param s3_path: str
+    :return: str
+    """
+    s3_bucket, s3_key = _get_bucket_key(s3_path)
+    s3 = boto3.client("s3", region_name=REGION)
+    try:
+        response = s3.put_object(Body=bytes(data, 'utf-8'), Bucket=s3_bucket, Key=s3_key)
+    except Exception as e:
+        raise e
